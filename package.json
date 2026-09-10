@@ -1,0 +1,48 @@
+{
+  "name": "novelist",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "overrides": {
+    "@xmldom/xmldom": "^0.8.15"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:integration": "RUN_SUPABASE_TESTS=1 vitest run src/lib/library/repository.integration.test.ts",
+    "test:browser": "playwright test",
+    "format": "prettier --write src tests playwright.config.ts index.html package.json",
+    "db:start": "supabase start -x realtime,imgproxy,inbucket,edge-runtime,logflare,vector,supavisor",
+    "db:stop": "supabase stop",
+    "db:lint": "supabase db lint --local",
+    "db:types": "supabase gen types typescript --local > src/lib/supabase/database.types.ts"
+  },
+  "dependencies": {
+    "@fontsource/literata": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "@supabase/supabase-js": "^2.116.0",
+    "dompurify": "^3.4.15",
+    "epubjs": "^0.3.93",
+    "lucide-react": "^1.43.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "jsdom": "^29.1.1",
+    "oxlint": "^1.79.0",
+    "prettier": "^3.9.6",
+    "supabase": "^2.117.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
+  }
+}
