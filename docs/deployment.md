@@ -83,6 +83,11 @@ activate this on the local development database. Re-run activation after future 
 - Hosted public and anonymous sign-ups are disabled, and minimum password length is12. Local
    development Auth is unchanged. Hosted changes used an isolated minimal config under `.novelist`;
    never push the local development config to the linked production project without reviewing its diff.
+- Keep `[auth].enable_signup = false` but `[auth.email].enable_signup = true`. The email-specific
+   switch enables the email provider; disabling it also blocks existing users with "Email logins are
+   disabled". The global switch still prevents public registration. After config propagation, verify
+   `/auth/v1/settings` reports `external.email: true`, `disable_signup: true` and
+   `mailer_autoconfirm: false`; email confirmation must remain required.
 - Supabase Free with the default email provider rejected custom email-template changes. Use its
    built-in sign-in links; the app supplies an exact callback origin and handles PKCE verification.
    Custom code-only templates require custom SMTP or a paid plan. The code-entry fallback is still
