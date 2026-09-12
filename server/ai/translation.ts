@@ -46,7 +46,9 @@ import { trackModelResponse, type ModelTracking } from './usage.ts'
 
 type Client = SupabaseClient<Database>
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
-const activeChapterTranslations = new Set<string>()
+const chapterLocksKey = Symbol.for('novelist.ai.chapter-locks')
+const processChapterLocks = globalThis as unknown as Record<symbol, Set<string> | undefined>
+const activeChapterTranslations = processChapterLocks[chapterLocksKey] ??= new Set<string>()
 
 export function lockTranslationChapters(ownerId: string, bookId: string, sourceKeys: string[]) {
   const keys = sourceKeys.map(sourceKey => JSON.stringify([ownerId, bookId, sourceKey]))

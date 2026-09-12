@@ -253,6 +253,7 @@ export class TranslationBatchManager {
       const current = await this.status(client, candidate.book_id, candidate.id)
       const batch = current.batch!
       if (
+        !batch.resume_automatically ||
         !['paused', 'failed'].includes(batch.state) ||
         !['server_restart', 'worker_interrupted'].includes(batch.last_error_code)
       )
@@ -265,7 +266,7 @@ export class TranslationBatchManager {
       )
         continue
       try {
-        await this.launch(token, ownerId, client, batch.id, true)
+        await this.launch(token, ownerId, client, batch.id, true, true)
         resumed += 1
       } catch (failure) {
         if (failure instanceof ExperimentError && failure.message.includes('preferences changed')) {
@@ -500,11 +501,6 @@ export class TranslationBatchManager {
       if (!this.configuration.liveEnabled || !this.configuration.apiKey)
         throw new ExperimentError('Enable the local AI server before resuming translations.', 403)
       if (worker) throw new ExperimentError('This queue still has an active worker.', 409)
-      const resumed = await client
-        .from('translation_batches')
-        .update({ resume_automatically: true, retry_at: null })
-        .eq('id', batch.id)
-      if (resumed.error) throw resumed.error
       await this.launch(token, ownerId, client, batch.id, input.retryFailed)
     }
     return { status: await this.status(client, input.bookId, batch.id) }
@@ -516,6 +512,7 @@ export class TranslationBatchManager {
     client: Client,
     batchId: string,
     retryFailed: boolean,
+    automaticResume = false,
   ) {
     if (this.stopping)
       throw new ExperimentError(
@@ -523,10 +520,11 @@ export class TranslationBatchManager {
         503,
       )
     const workerId = randomUUID()
-    const claim = await client.rpc('claim_translation_batch', {
+    const claim = await client.rpc('claim_translation_worker', {
       target_batch: batchId,
       worker_key: workerId,
       retry_failed: retryFailed,
+      automatic_resume: automaticResume,
     })
     if (claim.error) throw new ExperimentError(claim.error.message, 409)
     const state = { token, ownerId, promise: Promise.resolve() }

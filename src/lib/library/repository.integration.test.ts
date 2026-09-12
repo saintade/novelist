@@ -29,7 +29,7 @@ import {
   runReadingGuide,
   runStyleInference,
 } from '../../../server/ai/styles'
-import { editBookTranslationTerm, runBookTranslation, suggestBookTranslationTerm } from '../../../server/ai/translation'
+import { editBookTranslationTerm, lockTranslationChapters, runBookTranslation, suggestBookTranslationTerm } from '../../../server/ai/translation'
 import { siteNavigation } from '../../../server/extension/navigation'
 import { downloadSourceChapter, testSourceExtraction } from '../../../server/sources/chapters'
 import { analyzeSourceChapters } from '../../../server/sources/analysis'
@@ -209,8 +209,43 @@ describe.runIf(
       expect((await supabase.rpc('control_translation_batch', { target_batch: pausedId, command: 'pause' })).error).toBeNull()
       expect(await replacement.refreshAuthorization(token)).toEqual({ resumed: 0 })
       expect((await supabase.from('translation_batches').select('state,resume_automatically').eq('id', pausedId).single()).data).toEqual({ state: 'paused', resume_automatically: false })
+      expect((await supabase.from('translation_batch_chapters').update({ state: 'failed', attempts: 1 }).eq('batch_id', pausedId).eq('position', 0)).error).toBeNull()
+      expect((await supabase.from('translation_batches').update({ last_error_code: 'worker_interrupted' }).eq('id', pausedId)).error).toBeNull()
+      await expect(replacement.handle(token, { action: 'resume', bookId: book.id, batchId: pausedId, confirmed: true })).rejects.toThrow('Confirm retrying')
+      expect((await supabase.from('translation_batches').select('state,resume_automatically').eq('id', pausedId).single()).data).toEqual({ state: 'paused', resume_automatically: false })
+      const recovery = { target_batch: pausedId, worker_key: crypto.randomUUID(), retry_failed: true, automatic_resume: true }
+      expect((await supabase.rpc('claim_translation_worker', recovery)).error?.message).toContain('no longer permits automatic recovery')
+      expect(await replacement.refreshAuthorization(token)).toEqual({ resumed: 0 })
+      expect((await supabase.from('translation_batches').update({ resume_automatically: true }).eq('id', pausedId)).error).toBeNull()
+      expect((await supabase.from('translation_batch_chapters').update({ attempts: 3 }).eq('batch_id', pausedId).eq('position', 0)).error).toBeNull()
+      expect((await supabase.rpc('claim_translation_worker', recovery)).error?.message).toContain('no longer permits automatic recovery')
+      expect(inferProvider).toHaveBeenCalledTimes(2)
     } finally { original.stop(); replacement.stop(); await original.drain(); await replacement.drain(); await removeBook(book.id) }
   }, 15000)
+
+  it('preserves AI concurrency and hourly limits across module reloads', async () => {
+    const client = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false, storageKey: crypto.randomUUID() } })
+    const session = await client.auth.signInAnonymously()
+    expect(session.error).toBeNull()
+    const token = session.data.session!.access_token
+    const configuration = { supabaseUrl: import.meta.env.VITE_SUPABASE_URL, publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, apiKey: '', liveEnabled: false, model: 'test-only', root: '', maxConcurrentRequests: 1, maxRequestsPerHour: 1 }
+    const occupied = await acquireAILibrary(token, configuration)
+    const lockedBook = crypto.randomUUID().replaceAll('-', '')
+    const unlock = lockTranslationChapters(session.data.user!.id, lockedBook, ['local:0'])
+    let unexpected: Awaited<ReturnType<typeof acquireAILibrary>> | undefined
+    let unexpectedUnlock: (() => void) | undefined
+    try {
+      vi.resetModules()
+      const reloaded = await import('../../../server/ai/experiments')
+      const translation = await import('../../../server/ai/translation')
+      expect(() => { unexpectedUnlock = translation.lockTranslationChapters(session.data.user!.id, lockedBook, ['local:0']) }).toThrow('already being translated')
+      await expect(reloaded.acquireAILibrary(token, configuration, 0).then(access => { unexpected = access; return 'unexpectedly granted' })).rejects.toMatchObject({ code: 'local_capacity' })
+      occupied.release()
+      await expect(reloaded.acquireAILibrary(token, configuration).then(access => { unexpected = access; return 'unexpectedly granted' })).rejects.toThrow('1 requests per hour')
+      unlock()
+      unexpectedUnlock = translation.lockTranslationChapters(session.data.user!.id, lockedBook, ['local:0'])
+    } finally { occupied.release(); unexpected?.release(); unlock(); unexpectedUnlock?.() }
+  })
 
   it('waits for local AI capacity without failing or spending a chapter attempt', async () => {
     const { book } = await saveBook(await importBook(new File(['Chapter 1\nA capacity fixture.'], `Capacity-${crypto.randomUUID()}.txt`)))

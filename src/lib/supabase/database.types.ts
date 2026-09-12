@@ -1718,6 +1718,15 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      claim_translation_worker: {
+        Args: {
+          automatic_resume?: boolean
+          retry_failed?: boolean
+          target_batch: string
+          worker_key: string
+        }
+        Returns: undefined
+      }
       complete_batch_translation: {
         Args: {
           chapter_position: number

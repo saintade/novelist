@@ -40,8 +40,15 @@ export class ExperimentError extends Error {
   }
 }
 
-const activeUsers = new Map<string, number>()
-const requestsByUser = new Map<string, { count: number; startedAt: number }>()
+const limitsKey = Symbol.for('novelist.ai.request-limits')
+const processLimits = globalThis as unknown as Record<symbol, {
+  activeUsers: Map<string, number>
+  requestsByUser: Map<string, { count: number; startedAt: number }>
+} | undefined>
+const { activeUsers, requestsByUser } = processLimits[limitsKey] ??= {
+  activeUsers: new Map(),
+  requestsByUser: new Map(),
+}
 
 export function localAILimits(configuration: AIConfiguration) {
   return {

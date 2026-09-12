@@ -238,6 +238,15 @@ test('admin usage shows quota failures, monthly alerts and one cost per grouped 
   await expect(page.getByLabel('Monthly alert budget (USD)', { exact: true })).toHaveValue('5')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('admin-usage.png'), fullPage: true })
+  await page.route('**/api/ai/admin', async route => {
+    const input = route.request().postDataJSON()
+    if (input.action === 'overview' && input.month === '2001-01') {
+      await route.fulfill({ status: 503, json: { error: 'Usage for this month is temporarily unavailable.' } })
+    } else await route.fallback()
+  })
+  await page.getByLabel('Month (UTC)', { exact: true }).fill('2001-01')
+  await expect(page.getByText('Usage for this month is temporarily unavailable.', { exact: true })).toBeVisible()
+  await expect(page.locator('.admin-metrics')).toHaveCount(0)
 })
 
 test('a completed translation never pulls the reader away from another book', async ({ page }) => {

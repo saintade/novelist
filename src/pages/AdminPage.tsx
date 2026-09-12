@@ -110,7 +110,7 @@ export function AdminPage() {
           {error}
         </p>
       )}
-      {data && (
+      {data && data.month === month && (
         <>
           {quotaBlocked && (
             <div className="admin-alert" role="alert">
