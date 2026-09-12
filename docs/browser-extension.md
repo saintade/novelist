@@ -156,18 +156,23 @@ to the Mac and connects it to the same private hosted library as the phone; see 
 **Download method** selects **Direct URL fetch** or **Rendered browser pages**, saved per exact site
 origin and shared by single and bulk downloads. Direct mode submits each saved URL to an asynchronous
 server download job, reuses the site's extractor, and does not navigate or capture any chapter tabs.
+**Concurrent downloads** selects1-3 direct jobs (default3). The server admits up to3 chapter operations
+and2 sandbox extractions, queuing excess work instead of rejecting another chapter. Cached extraction
+does not occupy an AI model slot. Same-chapter operations wait for each other and recheck saved text.
 Browser mode opens one chapter at a time in the source tab and saves validated rendered text to that
 source. Already stored URLs are skipped before either fetch or browser navigation. Progress distinguishes newly saved
 chapters from those already saved. No title-based merging happens across chapters or sources.
-**Pause downloads** stops after an in-flight extraction finishes; **Resume downloads** continues from
+**Pause downloads** stops new dispatch and waits for in-flight jobs; **Resume downloads** continues from
 the checkpoint. Failed access, unexpected navigation, network errors and missing scrapers pause the
 batch without discarding completed chapters. The batch stays bound to the captured source and library.
-Pause before changing download methods; once any in-flight job finishes, switch and resume the same
+Pause before changing download methods; once all pending jobs finish, switch and resume the same
 pending chapter. A direct failure does not automatically switch modes or open a browser tab. After
 updating the extension, existing successful tests from an older build may require selecting Direct URL
 fetch manually; rebuilding the scraper again is unnecessary.
 
-**Seconds between chapters** is saved per site (1-60 seconds). Detected browser verification pauses
+**Seconds between chapters** is saved per site:0-60seconds for direct fetching and1-60seconds for
+rendered browser pages. New direct sites default to0, without a mandatory backend one-second wait;
+existing saved pacing is respected. Detected browser verification or a direct access challenge pauses
 before extraction, keeps the current chapter pending, and raises pacing to at least five seconds
 (doubling after repeated challenges, capped at 60). **Show source tab** opens the tab for manual
 resolution, then **Resume downloads** continues. No verification controls are clicked automatically,
@@ -175,9 +180,10 @@ and changing browser automation tools is not a solution to an access restriction
 help a site's request limits but is not guaranteed to prevent challenges.
 
 **Download timings** separates average browser navigation/capture time from extraction/save job time
-(including polling). These measurements support subsequent bottleneck analysis. Production batches
-remain sequential in both modes; direct mode reports zero browser captures. Experimental parallel workers are limited to the local fixture
-benchmark described in [translation-plan.md](translation-plan.md#download-experiments).
+(including polling). Direct mode reports zero browser captures. Completed URLs and pending server job
+IDs are checkpointed independently: a later chapter completing first does not advance past an unfinished
+earlier chapter or cause it to be forgotten. Resume polls existing jobs before submitting replacement
+work. Processed counts include out-of-order successes; overlapping durations are not total elapsed time.
 
 An observed redirect between extensionless and `.html`/`.htm` forms of the same path can continue only
 when both URLs are already present in that source's inventory and origin, query and hash are unchanged.
@@ -191,6 +197,12 @@ The reported 101kks 755-entry batch contained both `/txt/11508/5695534` and
 `/txt/11508/5695534.html` as chapter one. On 2026-09-11 the browser confirmed the former redirects
 to the latter, and the corresponding saved inventory was repaired to 754 entries. No chapter text,
 translation or source pairing was replaced. This is observed canonicalization, not guessed URL rewriting.
+
+A separate Novel543 inventory mistakenly counted the novel homepage as an unnumbered chapter between
+chapter752 and the final chapter. The offending homepage was removed after a private metadata backup,
+leaving754 genuine entries and preserving all752 saved files. Discovery now excludes an unnumbered
+parent-directory link when it is the homepage of the numbered chapter files. Prologues, final chapters
+and afterwords remain eligible. Refresh/rescan the source after reloading the updated extension.
 
 Each missing/failed scraper requires its own **Review model use for chapter** confirmation, permitting
 up to three model calls for that chapter only. It does not authorize paid work for every remaining

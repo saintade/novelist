@@ -41,6 +41,37 @@ describe('contents chapter inventory', () => {
       resolveChapterDestination(requested, 'https://other.example.test/txt/1/123.html', chapters),
     ).toThrow('different URL')
   })
+  it('excludes the novel homepage from a chapter directory without dropping end matter', () => {
+    const root = `${origin}/0214633001/`
+    const result = discoverContents(
+      {
+        url: `${root}dir`,
+        title: 'Novel contents',
+        truncated: false,
+        links: [
+          { title: 'The novel title...', url: root },
+          { title: 'Chapter 1', url: `${root}8095_1.html` },
+          { title: 'Chapter 752', url: `${root}8095_752.html` },
+          { title: '\u3010\u7d42\u7ae0\u3011', url: `${root}8095_753.html` },
+          { title: '\u3010\u5f8c\u8a18\u3011', url: `${root}8095_754.html` },
+        ],
+      },
+      {
+        chapterLinks: [{ title: 'Chapter 1', url: `${root}8095_1.html` }],
+        chapterCount: 754,
+        indexUrl: `${root}dir`,
+      },
+    )
+    expect(result.foundCount).toBe(4)
+    expect(result.chapters.map((chapter) => chapter.title)).toEqual([
+      'Chapter 1',
+      'Chapter 752',
+      'Final chapter',
+      'Afterword',
+    ])
+    expect(result.chapters.some((chapter) => chapter.url === root)).toBe(false)
+  })
+
   it('counts distinct chapter links and orders newest-first indexes from the beginning', () => {
     const document = new JSDOM(
       `<html><body><a href="/">Home</a><a href="/txt/1/after.html">\u3010\u5f8c\u8a18\u3011</a><a href="/txt/1/final.html">\u3010\u7d42\u7ae0\u3011</a><a href="/txt/1/3.html">\u30103\u3011 Third</a><a href="/txt/1/2.html">\u30102\u3011 Second</a><a href="/txt/1/1.html">\u30101\u3011 First</a><a href="/txt/1/1.html">Duplicate</a><a href="/book/1/index.html?page=2">Next page</a></body></html>`,

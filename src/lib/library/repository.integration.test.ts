@@ -292,6 +292,43 @@ describe.runIf(
     } finally { manager.stop(); await removeBook(book.id) }
   }, 30000)
 
+  it('queues only downloaded chapters for whole-book translation while preserving inventory positions', async () => {
+    await ensureSession()
+    const bookId = crypto.randomUUID().replaceAll('-', '')
+    const sourceUrl = `https://downloaded-only.example.test/${bookId}`
+    expect((await supabase.from('books').insert({ id: bookId, novel_id: null as unknown as string, title: 'Downloaded-only fixture', format: 'WEB', file_size: 0, source_url: sourceUrl, language: 'zh', import_state: 'ready' })).error).toBeNull()
+    const token = (await supabase.auth.getSession()).data.session!.access_token
+    const configuration = { supabaseUrl: import.meta.env.VITE_SUPABASE_URL, publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, apiKey: '', liveEnabled: false, model: 'test-only', root: '' }
+    const manager = new TranslationBatchManager(configuration)
+    try {
+      const source = (await supabase.from('novel_sources').select('*').eq('book_id', bookId).single()).data!
+      const contents = discoverContents({ url: sourceUrl, title: 'Contents', links: [1, 2, 3, 4].map(number => ({ title: `Chapter ${number}`, url: `${sourceUrl}/${number}` })), truncated: false }, { chapterLinks: [], chapterCount: 4, indexUrl: sourceUrl })
+      expect((await supabase.from('novel_sources').update({ contents_data: contents as unknown as Json }).eq('id', source.id)).error).toBeNull()
+      const ownerId = await ensureSession()
+      for (const number of [2, 4]) {
+        const serialized = JSON.stringify({ title: `Chapter ${number}`, paragraphs: [`Original ${number}.`] })
+        const path = `${ownerId}/sources/${source.id}/${number}.json`
+        const hash = createHash('sha256').update(serialized).digest('hex')
+        expect((await supabase.storage.from('library').upload(path, new TextEncoder().encode(serialized), { contentType: 'application/json' })).error).toBeNull()
+        expect((await supabase.from('source_chapters').insert({ source_id: source.id, url: `${sourceUrl}/${number}`, title: `Chapter ${number}`, content_path: path, content_hash: hash, word_count: 2 })).error).toBeNull()
+      }
+      await saveTranslationSettings(bookId, { targetLanguage: 'en', mainSource: source.id, referenceBookId: null, referenceSourceId: null, metadataSource: null, referenceMode: 'continuation' }, 0)
+      const plan = (await manager.handle(token, { action: 'plan', bookId, allUntranslated: true, chaptersPerRequest: 10 })).plan!
+      expect(plan).toMatchObject({ from: 1, to: 4, count: 2, missingCount: 0, undownloadedCount: 2 })
+      const manual = (await manager.handle(token, { action: 'plan', bookId, from: 1, to: 4 })).plan!
+      expect(manual.missingCount).toBe(2)
+      const batchId = crypto.randomUUID()
+      const changed = await supabase.rpc('create_untranslated_translation_batch', { request_id: crypto.randomUUID(), target_book: bookId, chapter_count: 4, expected_revision: plan.revision, chosen_model: plan.model, cost_estimate: { ...plan, count: 3 } as unknown as Json, maximum_group_size: 10 })
+      expect(changed.error?.message).toContain('downloaded chapters changed')
+      const created = await supabase.rpc('create_untranslated_translation_batch', { request_id: batchId, target_book: bookId, chapter_count: 4, expected_revision: plan.revision, chosen_model: plan.model, cost_estimate: plan as unknown as Json, maximum_group_size: 10 })
+      expect(created.error).toBeNull()
+      const queued = (await manager.handle(token, { action: 'status', bookId, batchId })).status!
+      expect(queued.chapters.map(chapter => chapter.position)).toEqual([1, 3])
+      expect(queued.chapters.map(chapter => chapter.source_key)).toEqual([`${sourceUrl}/2`, `${sourceUrl}/4`])
+      expect(queued.chapters.every(chapter => chapter.attempts === 0)).toBe(true)
+    } finally { manager.stop(); await removeBook(bookId) }
+  })
+
   it('starts durable reader jobs before generation finishes and preserves retranslation versions', async () => {
     const { book } = await saveBook(await importBook(new File(['Chapter 1\nOriginal reader chapter.'], `Reader-job-${crypto.randomUUID()}.txt`)))
     const token = (await supabase.auth.getSession()).data.session!.access_token
@@ -1679,6 +1716,45 @@ describe.runIf(
       expect(inferProvider).not.toHaveBeenCalled()
     } finally { await removeBook(book.id) }
   })
+
+  it('downloads independent chapters concurrently and reuses a duplicate in-flight chapter', async () => {
+    await ensureSession()
+    const bookId = crypto.randomUUID().replaceAll('-', '')
+    const sourceUrl = `https://parallel-downloads.example.test/${bookId}`
+    expect((await supabase.from('books').insert({ id: bookId, novel_id: null as unknown as string, title: 'Parallel downloads', format: 'WEB', file_size: 0, source_url: sourceUrl, language: 'en', import_state: 'ready' })).error).toBeNull()
+    let releaseFirst!: () => void
+    const firstWave = new Promise<void>(resolve => { releaseFirst = resolve })
+    let work: Promise<PromiseSettledResult<Awaited<ReturnType<typeof downloadSourceChapter>>>[]> | undefined
+    try {
+      const source = (await supabase.from('novel_sources').select('*').eq('book_id', bookId).single()).data!
+      const contents = discoverContents({ url: sourceUrl, title: 'Contents', links: [1, 2, 3, 4].map(number => ({ title: `Chapter ${number}`, url: `${sourceUrl}/${number}` })), truncated: false }, { chapterLinks: [], chapterCount: 4, indexUrl: sourceUrl })
+      expect((await supabase.from('novel_sources').update({ contents_data: contents as unknown as Json }).eq('id', source.id)).error).toBeNull()
+      let active = 0
+      let maximum = 0
+      const started: string[] = []
+      downloadFetch.mockReset().mockImplementation(async (_page, url) => {
+        started.push(url)
+        active += 1
+        maximum = Math.max(maximum, active)
+        if (started.length <= 3) await firstWave
+        active -= 1
+        return { url, html: '<h1>Chapter</h1><main>Complete source text.</main>' }
+      })
+      downloadScraper.mockReset().mockImplementation(async (_token, input) => ({ report: { id: crypto.randomUUID(), status: 'needs_review', adapter: { strategy: 'fixture' }, attempts: [{ checks: [{ url: input.pages[0].url, passed: true, output: { kind: 'chapter', title: 'Chapter', paragraphs: ['Complete source text.'], nextPageUrl: null, nextChapterUrl: null } }] }] } }))
+      const token = (await supabase.auth.getSession()).data.session!.access_token
+      const configuration = { supabaseUrl: import.meta.env.VITE_SUPABASE_URL, publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, apiKey: '', liveEnabled: false, model: 'test-only', root: '' }
+      work = Promise.allSettled([1, 2, 3, 4, 1].map(number => downloadSourceChapter(token, { sourceId: source.id, url: `${sourceUrl}/${number}` }, configuration)))
+      await expect.poll(() => started.length).toBe(3)
+      expect(maximum).toBe(3)
+      releaseFirst()
+      const results = await work
+      expect(results.every(result => result.status === 'fulfilled' && result.value.state === 'ready')).toBe(true)
+      expect(started).toHaveLength(4)
+      expect(new Set(started).size).toBe(4)
+      expect(downloadScraper).toHaveBeenCalledTimes(4)
+      expect((await supabase.from('source_chapters').select('url').eq('source_id', source.id)).data).toHaveLength(4)
+    } finally { releaseFirst(); if (work) await work; await removeBook(bookId) }
+  }, 15000)
 
   it('stores compressible downloads as gzip and verifies the original text on both read paths', async () => {
     await ensureSession()

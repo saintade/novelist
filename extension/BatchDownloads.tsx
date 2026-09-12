@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Download, LoaderCircle, Pause, Play } from 'lucide-react'
-import type { PanelMessage, PanelState } from './protocol'
+import { hasChapterJobs, type PanelMessage, type PanelState } from './protocol'
 import { Confirmation } from './Confirmation'
 
 export function BatchDownloads({
@@ -19,17 +19,25 @@ export function BatchDownloads({
   const [confirm, setConfirm] = useState(false)
   const [permission, setPermission] = useState(false)
   const [delayOverride, setDelayOverride] = useState<number | null>(null)
+  const [concurrencyOverride, setConcurrencyOverride] = useState<number | null>(null)
   const batch = state.chapterBatch
+  const transport = batch?.transport ?? state.downloadTransport ?? 'browser'
   const delaySeconds = delayOverride ?? batch?.delaySeconds ?? state.downloadDelaySeconds ?? 1
+  const concurrency = concurrencyOverride ?? batch?.concurrency ?? 3
   const running = batch?.state === 'running'
-  const disabled = locked || !state.connected || !state.savedSource || Boolean(batch?.jobId)
+  const disabled = locked || !state.connected || !state.savedSource || hasChapterJobs(batch)
   const valid =
     Number.isInteger(from) && Number.isInteger(to) && from > 0 && to >= from && to <= count
-  const validDelay = Number.isInteger(delaySeconds) && delaySeconds >= 1 && delaySeconds <= 60
-  const transport = batch?.transport ?? state.downloadTransport ?? 'browser'
+  const validDelay =
+    Number.isInteger(delaySeconds) &&
+    delaySeconds >= (transport === 'http' ? 0 : 1) &&
+    delaySeconds <= 60 &&
+    Number.isInteger(concurrency) &&
+    concurrency >= 1 &&
+    concurrency <= 3
   const resume = (confirmed: boolean) => {
     setDelayOverride(null)
-    void action({ type: 'resume-downloads', confirmed, delaySeconds })
+    void action({ type: 'resume-downloads', confirmed, delaySeconds, concurrency })
   }
   return (
     <section className="batch-downloads" aria-label="Bulk downloads">
@@ -66,12 +74,24 @@ export function BatchDownloads({
         Seconds between chapters
         <input
           type="number"
-          min={1}
+          min={transport === 'http' ? 0 : 1}
           max={60}
           value={delaySeconds}
           disabled={locked}
           onChange={(event) => setDelayOverride(Number(event.target.value))}
           title="Saved for this site. A browser verification pauses the queue and increases pacing; it is never solved automatically."
+        />
+      </label>
+      <label className="batch-delay">
+        Concurrent downloads
+        <input
+          type="number"
+          min={1}
+          max={3}
+          step={1}
+          value={transport === 'http' ? concurrency : 1}
+          disabled={locked || transport !== 'http'}
+          onChange={(event) => setConcurrencyOverride(Number(event.target.value))}
         />
       </label>
       <div className="batch-actions">
@@ -81,7 +101,14 @@ export function BatchDownloads({
           title="Download this inclusive range from the unique chapter list, not just the current search results. Already saved chapters are skipped."
           onClick={() => {
             setDelayOverride(null)
-            void action({ type: 'download-chapters', mode: 'range', from, to, delaySeconds })
+            void action({
+              type: 'download-chapters',
+              mode: 'range',
+              from,
+              to,
+              delaySeconds,
+              concurrency,
+            })
           }}
         >
           <Download size={15} />
@@ -93,7 +120,7 @@ export function BatchDownloads({
           title={`Download all ${count} unique indexed chapters using ${transport === 'http' ? 'direct server fetches without opening tabs' : 'rendered browser pages'}. Partial inventories may not contain the whole novel. Already saved chapters are skipped.`}
           onClick={() => {
             setDelayOverride(null)
-            void action({ type: 'download-chapters', mode: 'all', delaySeconds })
+            void action({ type: 'download-chapters', mode: 'all', delaySeconds, concurrency })
           }}
         >
           <Download size={15} />
@@ -105,15 +132,19 @@ export function BatchDownloads({
           <progress
             aria-label="Downloaded chapter progress"
             max={batch.urls.length}
-            value={batch.next}
+            value={batch.completedUrls?.length ?? batch.next}
           />
           <p role="status">
             {running && <LoaderCircle size={14} className="spin" />}
-            {batch.next} / {batch.urls.length} processed / {batch.saved} saved / {batch.skipped}{' '}
-            already saved
+            {batch.completedUrls?.length ?? batch.next} / {batch.urls.length} processed /{' '}
+            {batch.saved} saved / {batch.skipped} already saved
           </p>
           <p>{batch.message}</p>
-          <p>{transport === 'http' ? 'Direct URL fetch' : 'Rendered browser pages'}</p>
+          <p>
+            {transport === 'http'
+              ? `Direct URL fetch / up to ${batch.concurrency ?? 3} at once`
+              : 'Rendered browser pages'}
+          </p>
           {batch.timing && (
             <details className="batch-timings">
               <summary>Download timings</summary>

@@ -61,10 +61,17 @@ export interface ChapterDownloadBatch {
   state: 'running' | 'paused' | 'needs_scraper' | 'needs_browser' | 'completed'
   message: string
   jobId?: string
+  jobs?: Record<string, string>
+  completedUrls?: string[]
+  concurrency?: number
   transport?: 'browser' | 'http'
   delaySeconds?: number
   accessChallenges?: number
   timing?: { browserMs: number; browserPages: number; processingMs: number; processingJobs: number }
+}
+
+export function hasChapterJobs(batch?: ChapterDownloadBatch): boolean {
+  return Boolean(batch?.jobId || Object.keys(batch?.jobs ?? {}).length)
 }
 
 export interface StoredState {
@@ -132,7 +139,8 @@ export const panelMessageSchema = z.discriminatedUnion('type', [
       mode: z.enum(['all', 'range']),
       from: z.number().int().min(1).max(20000).optional(),
       to: z.number().int().min(1).max(20000).optional(),
-      delaySeconds: z.number().int().min(1).max(60).optional(),
+      delaySeconds: z.number().int().min(0).max(60).optional(),
+      concurrency: z.number().int().min(1).max(3).optional(),
     })
     .strict(),
   z.object({ type: z.literal('pause-downloads') }).strict(),
@@ -140,7 +148,8 @@ export const panelMessageSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('resume-downloads'),
       confirmed: z.boolean().default(false),
-      delaySeconds: z.number().int().min(1).max(60).optional(),
+      delaySeconds: z.number().int().min(0).max(60).optional(),
+      concurrency: z.number().int().min(1).max(3).optional(),
     })
     .strict(),
   z

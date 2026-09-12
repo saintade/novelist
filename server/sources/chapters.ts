@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
-import { setTimeout as delay } from 'node:timers/promises'
+import pLimit from 'p-limit'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { load } from 'cheerio'
 import type { Database, Json } from '../../src/lib/supabase/database.types.ts'
@@ -13,7 +13,7 @@ import {
   type SourceExtractionResult,
   type SourceDownloadResult,
 } from '../../src/lib/sources/contracts.ts'
-import { acquireAILibrary, ExperimentError, type AIConfiguration } from '../ai/experiments.ts'
+import { authenticateAILibrary, ExperimentError, type AIConfiguration } from '../ai/experiments.ts'
 import { fetchChapterSample } from '../extension/sample.ts'
 import { isNovelUpdatesSeries } from '../../src/lib/extension/metadata.ts'
 import { runScraperTool } from '../scraper/tool.ts'
@@ -21,9 +21,33 @@ import { isAccessChallenge } from '../../src/lib/extension/navigation.ts'
 import { canonicalChapterUrl } from '../../src/lib/extension/contents.ts'
 import { storedChapterText } from '../../src/lib/sources/content.ts'
 
-const active = new Set<string>()
-const nextFetch = new Map<string, number>()
+type DownloadRuntime = { slots: ReturnType<typeof pLimit>; chapters: Map<string, Promise<void>> }
+const downloadRuntimeKey = Symbol.for('novelist.source-downloads')
+const processDownloads = globalThis as unknown as Record<symbol, DownloadRuntime | undefined>
+const downloadRuntime = (processDownloads[downloadRuntimeKey] ??= {
+  slots: pLimit(3),
+  chapters: new Map(),
+})
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+
+function sourceOperation<Result>(
+  ownerId: string,
+  sourceId: string,
+  url: string,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const key = JSON.stringify([ownerId, sourceId, url])
+  const previous = downloadRuntime.chapters.get(key) ?? Promise.resolve()
+  const result = previous.then(() => downloadRuntime.slots(operation))
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  downloadRuntime.chapters.set(key, settled)
+  return result.finally(() => {
+    if (downloadRuntime.chapters.get(key) === settled) downloadRuntime.chapters.delete(key)
+  })
+}
 
 export async function storedSourceChapter(
   client: SupabaseClient<Database>,
@@ -69,9 +93,6 @@ async function chapterSource(
 }
 
 async function fetchSourcePage(previous: CapturedPage, url: string) {
-  const origin = new URL(previous.url).origin
-  await delay(Math.max(0, (nextFetch.get(origin) ?? 0) - Date.now()))
-  nextFetch.set(origin, Date.now() + 1000)
   return fetchChapterSample(previous, url)
 }
 
@@ -81,14 +102,9 @@ export async function testSourceExtraction(
   configuration: AIConfiguration,
 ): Promise<SourceExtractionResult> {
   const input = sourceExtractionSchema.parse(payload)
-  const access = await acquireAILibrary(token, configuration, 0)
-  const { client, ownerId } = access
-  access.release()
+  const { client, ownerId } = await authenticateAILibrary(token, configuration)
   const { source, url } = await chapterSource(client, input.sourceId, input.url)
-  if (active.has(ownerId))
-    throw new ExperimentError('Another chapter operation is running. Wait for it to finish.', 409)
-  active.add(ownerId)
-  try {
+  return sourceOperation<SourceExtractionResult>(ownerId, input.sourceId, url, async () => {
     const anchor = load('<a>Chapter</a>')
     anchor('a').attr('href', url)
     let page: CapturedPage
@@ -151,9 +167,7 @@ export async function testSourceExtraction(
       nextPageUrl: check.output.nextPageUrl,
       warning: result.report.persistenceWarning,
     }
-  } finally {
-    active.delete(ownerId)
-  }
+  })
 }
 
 export async function downloadSourceChapter(
@@ -162,16 +176,13 @@ export async function downloadSourceChapter(
   configuration: AIConfiguration,
 ): Promise<SourceDownloadResult> {
   const input = sourceDownloadSchema.parse(payload)
-  const access = await acquireAILibrary(token, configuration, 0)
-  const { client, ownerId } = access
-  access.release()
+  const { client, ownerId } = await authenticateAILibrary(token, configuration)
   const { source, url } = await chapterSource(client, input.sourceId, input.url)
   const stored = await storedSourceChapter(client, input.sourceId, url)
   if (stored) return { state: 'ready', ...stored, cached: true }
-  if (active.has(ownerId))
-    throw new ExperimentError('Another chapter download is running. Wait for it to finish.', 409)
-  active.add(ownerId)
-  try {
+  return sourceOperation<SourceDownloadResult>(ownerId, input.sourceId, url, async () => {
+    const completed = await storedSourceChapter(client, input.sourceId, url)
+    if (completed) return { state: 'ready', ...completed, cached: true }
     const anchor = load('<a>Chapter</a>')
     anchor('a').attr('href', url)
     let previous: CapturedPage = { url: source.url!, html: anchor.html() }
@@ -267,7 +278,10 @@ export async function downloadSourceChapter(
     const path = `${ownerId}/sources/${source.id}/${hash(url)}/${contentHash}.json${useCompression ? '.gz' : ''}`
     const uploaded = await client.storage
       .from('library')
-      .upload(path, useCompression ? compressed! : originalBytes, { contentType: useCompression ? 'application/gzip' : 'application/json', upsert: true })
+      .upload(path, useCompression ? compressed! : originalBytes, {
+        contentType: useCompression ? 'application/gzip' : 'application/json',
+        upsert: true,
+      })
     if (uploaded.error) throw new ExperimentError('Chapter text could not be stored.', 502)
     const saved = await client
       .from('source_chapters')
@@ -290,7 +304,5 @@ export async function downloadSourceChapter(
       throw new ExperimentError('Chapter metadata could not be saved. Retry the download.', 502)
     }
     return { state: 'ready', record: saved.data, chapter, cached: false }
-  } finally {
-    active.delete(ownerId)
-  }
+  })
 }

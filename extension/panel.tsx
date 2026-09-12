@@ -22,7 +22,13 @@ import type { ExtensionJob } from '../src/lib/extension/contracts'
 import { outputLanguages, type OutputLanguage } from '../src/lib/extension/contracts'
 import type { AnalysisModel } from '../src/lib/extension/contracts'
 import { textModelPrices } from '../src/lib/ai/pricing'
-import { DEFAULT_ORIGIN, type PanelMessage, type PanelResponse, type PanelState } from './protocol'
+import {
+  DEFAULT_ORIGIN,
+  hasChapterJobs,
+  type PanelMessage,
+  type PanelResponse,
+  type PanelState,
+} from './protocol'
 import './panel.css'
 import { IdentificationCosts, IdentificationDetails } from './IdentificationDetails'
 import { Confirmation } from './Confirmation'
@@ -277,7 +283,9 @@ function PageWorkflow({
   const capture = state.capture!
   const inspection = state.inspection?.inspection
   const catalogOnly = isNovelUpdatesSeries(capture.page.url)
-  const [view, setView] = useState<'chapters' | 'metadata' | 'settings'>(catalogOnly ? 'metadata' : 'chapters')
+  const [view, setView] = useState<'chapters' | 'metadata' | 'settings'>(
+    catalogOnly ? 'metadata' : 'chapters',
+  )
   const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>(
     state.inspection?.outputLanguage ?? 'en',
   )
@@ -348,7 +356,18 @@ function PageWorkflow({
         <h1>{inspection?.title || capture.pageTitle || new URL(capture.page.url).pathname}</h1>
       </section>
       <div className="workflow-tabs" role="tablist" aria-label="Page views">
-        {(['chapters', 'metadata', 'settings'] as const).filter(name => !catalogOnly || name !== 'chapters').map(name => <button key={name} role="tab" aria-selected={view === name} onClick={() => setView(name)}>{name === 'chapters' ? 'Chapters' : name === 'metadata' ? 'Metadata' : 'Settings'}</button>)}
+        {(['chapters', 'metadata', 'settings'] as const)
+          .filter((name) => !catalogOnly || name !== 'chapters')
+          .map((name) => (
+            <button
+              key={name}
+              role="tab"
+              aria-selected={view === name}
+              onClick={() => setView(name)}
+            >
+              {name === 'chapters' ? 'Chapters' : name === 'metadata' ? 'Metadata' : 'Settings'}
+            </button>
+          ))}
       </div>
       <LibraryActions
         state={state}
@@ -440,216 +459,216 @@ function PageWorkflow({
         </p>
       )}
       <div hidden={view !== 'chapters'}>
-      {inspection && !catalogOnly && (
-        <section className="chapter-workflow" aria-label="Chapters">
-          <div className="section-title">
-            <h2>Chapters</h2>
-            {inspection.indexUrl && (
-              <a
-                className="icon-button"
-                href={inspection.indexUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="Open contents page"
-                aria-label="Open contents page"
-              >
-                <ExternalLink size={16} />
-              </a>
-            )}
-          </div>
-          <button
-            className="button primary full-width"
-            title="Collect every reachable chapter link and update this source's inventory. No model call or chapter text download."
-            disabled={locked || !state.connected || !state.inspection?.recordId}
-            onClick={() => void action({ type: 'contents' })}
-          >
-            <ListOrdered size={16} />
-            Scan &amp; save chapters
-          </button>
-          {state.scanningContents && (
-            <div className="working" role="status">
-              <LoaderCircle className="spin" size={17} />
-              <span>{state.contentsScan?.reason || 'Scanning chapter links'}</span>
-              <button
-                className="icon-button"
-                title="Stop scan"
-                aria-label="Stop scan"
-                onClick={() => void action({ type: 'stop-contents' })}
-              >
-                <Square size={14} />
-              </button>
-            </div>
-          )}
-          {contents && (
-            <div className="contents-inventory" role="region" aria-label="Discovered chapters">
-              <h3>{chapterChoices.length.toLocaleString()} chapter links found</h3>
-              <p>
-                {contents.reportedCount !== null
-                  ? `${contents.reportedCount.toLocaleString()} reported by the site`
-                  : 'No total reported by the site'}
-                {contents.numberedCount ? ' / oldest first' : ''}
-              </p>
-              {partial && (
-                <p className="sample-error">
-                  Partial list: more chapters may remain.
-                  {state.contentsScan ? ` ${state.contentsScan.reason}` : ''}
-                </p>
-              )}
-              {state.contentsSaved && (
-                <p role="status">
-                  {state.contentsSaved.saved
-                    ? `${state.contentsSaved.foundCount.toLocaleString()} links saved to Novelist.`
-                    : 'Kept the longer list already saved.'}
-                </p>
-              )}
-              {state.contentsSaveError && (
-                <>
-                  <p className="sample-error" role="alert">
-                    {state.contentsSaveError}
-                  </p>
-                  <button
-                    className="button"
-                    disabled={locked}
-                    onClick={() => void action({ type: 'save-contents' })}
-                  >
-                    <Save size={14} />
-                    Retry saving
-                  </button>
-                </>
+        {inspection && !catalogOnly && (
+          <section className="chapter-workflow" aria-label="Chapters">
+            <div className="section-title">
+              <h2>Chapters</h2>
+              {inspection.indexUrl && (
+                <a
+                  className="icon-button"
+                  href={inspection.indexUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open contents page"
+                  aria-label="Open contents page"
+                >
+                  <ExternalLink size={16} />
+                </a>
               )}
             </div>
-          )}
-          {chapterChoices.length > 0 && (
-            <div className="chapter-test-picker">
-              <label className="catalog-search">
-                <Search size={16} />
-                <input
-                  aria-label="Find a chapter"
-                  placeholder="Find a chapter"
-                  value={chapterQuery}
-                  onChange={(event) => setChapterQuery(event.target.value)}
-                />
-              </label>
-              <label>
-                Chapter
-                <select
-                  aria-label="Chapter"
-                  title="Choose a chapter from this source's complete saved list."
-                  value={selectedChapter?.url ?? ''}
-                  disabled={locked}
-                  onChange={(event) => setSelected(event.target.value)}
-                >
-                  {!filteredChapters.length && <option value="">No matching chapters</option>}
-                  {filteredChapters.map((chapter) => (
-                    <option key={chapter.url} value={chapter.url}>
-                      {chapter.title}
-                      {'sourceTitle' in chapter && chapter.sourceTitle !== chapter.title
-                        ? ` - ${chapter.sourceTitle}`
-                        : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Download method
-                <select
-                  value={state.downloadTransport ?? 'browser'}
-                  disabled={
-                    locked ||
-                    !state.connected ||
-                    !state.savedSource ||
-                    Boolean(state.chapterBatch?.jobId)
-                  }
-                  onChange={(event) =>
-                    void action({
-                      type: 'set-download-transport',
-                      transport: event.target.value as 'browser' | 'http',
-                    })
-                  }
-                  title="Applies to single chapters and bulk downloads. Direct fetch does not open chapter tabs. Pause a batch before switching."
-                >
-                  <option value="http">Direct URL fetch</option>
-                  <option value="browser">Rendered browser pages</option>
-                </select>
-              </label>
-              <div className="chapter-test-actions">
-                <button
-                  className="button primary"
-                  title="Save the observed chapter list, then download this chapter with the selected method. Ask before scraper generation costs."
-                  disabled={!selectedChapter || locked || !state.connected || !state.savedSource}
-                  onClick={() => {
-                    if (selectedChapter)
-                      void action({
-                        type: 'download-chapter',
-                        url: selectedChapter.url,
-                        confirmed: false,
-                      })
-                  }}
-                >
-                  <Download size={16} />
-                  Download chapter
-                </button>
+            <button
+              className="button primary full-width"
+              title="Collect every reachable chapter link and update this source's inventory. No model call or chapter text download."
+              disabled={locked || !state.connected || !state.inspection?.recordId}
+              onClick={() => void action({ type: 'contents' })}
+            >
+              <ListOrdered size={16} />
+              Scan &amp; save chapters
+            </button>
+            {state.scanningContents && (
+              <div className="working" role="status">
+                <LoaderCircle className="spin" size={17} />
+                <span>{state.contentsScan?.reason || 'Scanning chapter links'}</span>
                 <button
                   className="icon-button"
-                  aria-label="Test chapter extraction"
-                  title="Test extraction without saving chapter text. Shows scraper diagnostics and asks before model use."
-                  disabled={!selectedChapter || locked || !state.connected}
-                  onClick={() => {
-                    setPermission(false)
-                    setConfirm('test')
-                  }}
+                  title="Stop scan"
+                  aria-label="Stop scan"
+                  onClick={() => void action({ type: 'stop-contents' })}
                 >
-                  <ScanText size={16} />
+                  <Square size={14} />
                 </button>
-                {selectedChapter && (
-                  <a
-                    className="icon-button"
-                    href={selectedChapter.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label="Open selected chapter"
-                    title="Open selected chapter"
-                  >
-                    <ExternalLink size={16} />
-                  </a>
+              </div>
+            )}
+            {contents && (
+              <div className="contents-inventory" role="region" aria-label="Discovered chapters">
+                <h3>{chapterChoices.length.toLocaleString()} chapter links found</h3>
+                <p>
+                  {contents.reportedCount !== null
+                    ? `${contents.reportedCount.toLocaleString()} reported by the site`
+                    : 'No total reported by the site'}
+                  {contents.numberedCount ? ' / oldest first' : ''}
+                </p>
+                {partial && (
+                  <p className="sample-error">
+                    Partial list: more chapters may remain.
+                    {state.contentsScan ? ` ${state.contentsScan.reason}` : ''}
+                  </p>
+                )}
+                {state.contentsSaved && (
+                  <p role="status">
+                    {state.contentsSaved.saved
+                      ? `${state.contentsSaved.foundCount.toLocaleString()} links saved to Novelist.`
+                      : 'Kept the longer list already saved.'}
+                  </p>
+                )}
+                {state.contentsSaveError && (
+                  <>
+                    <p className="sample-error" role="alert">
+                      {state.contentsSaveError}
+                    </p>
+                    <button
+                      className="button"
+                      disabled={locked}
+                      onClick={() => void action({ type: 'save-contents' })}
+                    >
+                      <Save size={14} />
+                      Retry saving
+                    </button>
+                  </>
                 )}
               </div>
-              {state.chapterDownload?.url === selectedChapter?.url && (
-                <div className="download-result" role="status">
-                  {state.chapterDownload?.state === 'ready' ? (
-                    'Chapter saved. Ready to read in Novelist.'
-                  ) : (
-                    <>
-                      <p>{state.chapterDownload?.message}</p>
-                      {state.chapterDownload?.state === 'needs_scraper' && (
-                        <button
-                          className="button"
-                          disabled={locked}
-                          onClick={() => {
-                            setPermission(false)
-                            setConfirm('download')
-                          }}
-                        >
-                          Review model use
-                        </button>
-                      )}
-                    </>
+            )}
+            {chapterChoices.length > 0 && (
+              <div className="chapter-test-picker">
+                <label className="catalog-search">
+                  <Search size={16} />
+                  <input
+                    aria-label="Find a chapter"
+                    placeholder="Find a chapter"
+                    value={chapterQuery}
+                    onChange={(event) => setChapterQuery(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Chapter
+                  <select
+                    aria-label="Chapter"
+                    title="Choose a chapter from this source's complete saved list."
+                    value={selectedChapter?.url ?? ''}
+                    disabled={locked}
+                    onChange={(event) => setSelected(event.target.value)}
+                  >
+                    {!filteredChapters.length && <option value="">No matching chapters</option>}
+                    {filteredChapters.map((chapter) => (
+                      <option key={chapter.url} value={chapter.url}>
+                        {chapter.title}
+                        {'sourceTitle' in chapter && chapter.sourceTitle !== chapter.title
+                          ? ` - ${chapter.sourceTitle}`
+                          : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Download method
+                  <select
+                    value={state.downloadTransport ?? 'browser'}
+                    disabled={
+                      locked ||
+                      !state.connected ||
+                      !state.savedSource ||
+                      hasChapterJobs(state.chapterBatch)
+                    }
+                    onChange={(event) =>
+                      void action({
+                        type: 'set-download-transport',
+                        transport: event.target.value as 'browser' | 'http',
+                      })
+                    }
+                    title="Applies to single chapters and bulk downloads. Direct fetch does not open chapter tabs. Pause a batch before switching."
+                  >
+                    <option value="http">Direct URL fetch</option>
+                    <option value="browser">Rendered browser pages</option>
+                  </select>
+                </label>
+                <div className="chapter-test-actions">
+                  <button
+                    className="button primary"
+                    title="Save the observed chapter list, then download this chapter with the selected method. Ask before scraper generation costs."
+                    disabled={!selectedChapter || locked || !state.connected || !state.savedSource}
+                    onClick={() => {
+                      if (selectedChapter)
+                        void action({
+                          type: 'download-chapter',
+                          url: selectedChapter.url,
+                          confirmed: false,
+                        })
+                    }}
+                  >
+                    <Download size={16} />
+                    Download chapter
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="Test chapter extraction"
+                    title="Test extraction without saving chapter text. Shows scraper diagnostics and asks before model use."
+                    disabled={!selectedChapter || locked || !state.connected}
+                    onClick={() => {
+                      setPermission(false)
+                      setConfirm('test')
+                    }}
+                  >
+                    <ScanText size={16} />
+                  </button>
+                  {selectedChapter && (
+                    <a
+                      className="icon-button"
+                      href={selectedChapter.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label="Open selected chapter"
+                      title="Open selected chapter"
+                    >
+                      <ExternalLink size={16} />
+                    </a>
                   )}
                 </div>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-      {inspection && !catalogOnly && chapterChoices.length > 0 && (
-        <BatchDownloads
-          state={state}
-          count={chapterChoices.length}
-          locked={Boolean(locked)}
-          action={action}
-        />
-      )}
-      {result && <ScrapeResult job={state.job!} />}
+                {state.chapterDownload?.url === selectedChapter?.url && (
+                  <div className="download-result" role="status">
+                    {state.chapterDownload?.state === 'ready' ? (
+                      'Chapter saved. Ready to read in Novelist.'
+                    ) : (
+                      <>
+                        <p>{state.chapterDownload?.message}</p>
+                        {state.chapterDownload?.state === 'needs_scraper' && (
+                          <button
+                            className="button"
+                            disabled={locked}
+                            onClick={() => {
+                              setPermission(false)
+                              setConfirm('download')
+                            }}
+                          >
+                            Review model use
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+        {inspection && !catalogOnly && chapterChoices.length > 0 && (
+          <BatchDownloads
+            state={state}
+            count={chapterChoices.length}
+            locked={Boolean(locked)}
+            action={action}
+          />
+        )}
+        {result && <ScrapeResult job={state.job!} />}
       </div>
       {inspection && (
         <section className="inspection-section" hidden={view !== 'metadata'}>

@@ -221,6 +221,7 @@ export function TranslationRange({
               from: plan.from,
               to: plan.to,
               expectedRevision: plan.revision,
+              expectedCount: plan.count,
               chaptersPerRequest: plan.chaptersPerRequest,
               allUntranslated: plan.allUntranslated,
               confirmed: permission,
@@ -287,7 +288,7 @@ export function TranslationRange({
               className="button primary"
               disabled={
                 busy ||
-                overview.total === 0 ||
+                overview.downloaded === 0 ||
                 !Number.isInteger(chaptersPerRequest) ||
                 chaptersPerRequest < 1 ||
                 chaptersPerRequest > 10
@@ -535,6 +536,13 @@ export function TranslationRange({
                   Chapters {plan.from}-{plan.to} / {plan.count} chapters / {plan.model} /{' '}
                   {plan.language}
                 </p>
+                {plan.allUntranslated && (
+                  <p>
+                    {plan.count} downloaded {plan.count === 1 ? 'chapter' : 'chapters'} selected.{' '}
+                    {plan.undownloadedCount} undownloaded{' '}
+                    {plan.undownloadedCount === 1 ? 'chapter' : 'chapters'} excluded.
+                  </p>
+                )}
                 {plan.missingCount ? (
                   <div role="alert" className="form-error">
                     <p>

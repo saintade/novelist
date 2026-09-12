@@ -185,9 +185,15 @@ export function discoverContents(
     const dominant = [...groups].sort((first, second) => second[1] - first[1])[0]
     if (dominant) knownDirectories.add(dominant[0])
   }
+  const chapterDirectories = new Set(
+    [...links]
+      .filter(([, link]) => link.number !== null)
+      .map(([url]) => new URL(directory(url), url).href),
+  )
   const candidates = [...links].filter(
     ([url, link]) =>
       knownDirectories.has(directory(url)) &&
+      !(link.number === null && chapterKind(link.title) === 1 && chapterDirectories.has(url)) &&
       (directory(url) !== '/' ||
         (rootFamilies.size ? rootFamilies.has(rootFamily(url)) : link.number !== null)) &&
       (link.number !== null ||

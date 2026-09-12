@@ -8,13 +8,13 @@ translation, and deployment. UI baseline commit: `51c3f38`.
 This section records the current implementation and supersedes older source-pairing descriptions
 below. The project evolved from multi-source novels into independent source books during this work.
 
-Verification on 2026-09-11: 165 backend/shared tests with local Supabase and Docker enabled,
-48 desktop/Android/iPhone browser workflows, and 12 installed-extension workflows passed.
+Verification on 2026-09-11: 169 backend/shared tests with local Supabase and Docker enabled,
+51 desktop/Android/iPhone browser workflows, and13 installed-extension workflows passed.
 Application and extension builds, lint, database lint and patch whitespace checks passed.
 The noun editor and reader screenshots were inspected on mobile. Model responses in tests were
 mocked; read-only audits of saved user translations made no paid calls. Adaptive regular-API groups,
 independent background reader jobs, bounded automatic retries, private hosting code, gzip files
-and usage administration are implemented. Supabase CLI is now linked,54 schema migrations are deployed,
+and usage administration are implemented. Supabase CLI is now linked,55 schema migrations are deployed,
 and the preserved hosted owner awaits email verification. Library-data/file migration, private GitHub
 push and Render deployment remain pending. The discounted provider Batch API is not implemented or
 live-provider evaluated. Built-in email-link login supports the Free project's default email provider.
@@ -29,10 +29,10 @@ live-provider evaluated. Built-in email-link login supports the Free project's d
 | Read downloaded chapters internally  | Chapter URLs open the reader, cached text is reused, uncached text downloads first. Source progress remains separate.                                                                                                                                                                                                                                                                                     |
 | Reliable chapter inventories         | Deterministic dynamic/paginated scans, numbered first-chapter labels, URL deduplication, verified canonical aliases, retained longer inventories and visible save errors.                                                                                                                                                                                                                                 |
 | Direct fetch and browser downloads   | Per-site Download method beside the extension chapter picker. Direct jobs use URLs without tab navigation; browser mode captures rendered pages. Pause, switch and resume retains the queue.                                                                                                                                                                                                              |
-| Bulk all/range downloads             | App and extension all/range controls, saved-URL skipping, pacing, pause/resume and challenge stops. Batches are sequential, not production parallel workers.                                                                                                                                                                                                                                              |
+| Bulk all/range downloads             | App and extension direct fetches run1-3 concurrent jobs, default3. Direct pacing permits0seconds; rendered browser mode remains one tab with1-60second pacing. Global3-download/2-sandbox admission, duplicate cache recheck, out-of-order checkpoints, pause/resume and challenge stops. App Retry direct and Skip chapter controls avoid a stuck selection. |
 | Rebuild extraction                   | Force regeneration bypasses cached code only with explicit model permission. Passing code replaces the cache; failed rebuilds preserve it. Direct tests use fetched chapter HTML and never overwrite downloaded text.                                                                                                                                                                                     |
 | One-click translation                | With saved preferences, Translate immediately translates, saves and opens the chapter. Original switches back; navigation alone does not call AI.                                                                                                                                                                                                                                                         |
-| Mass translation                     | Translate untranslated covers the whole indexed book up to20,000 chapters; manual ranges up to1,000. Adaptive groups of1-10, cost confirmation, exact saved-version skips, independent reader jobs and durable states. Completed chapter objects can be salvaged after token-limit truncation; unfinished chapters retry automatically up to3 total attempts. Source/settings guards and manual Pause/Cancel prevail. Migrations027-041 applied locally. |
+| Mass translation                     | Translate untranslated selects downloaded originals only across up to20,000 indexed chapters, keeps sparse original positions and excludes missing downloads; manual ranges up to1,000 remain strict. Reviewed count changes reject before starting. Adaptive groups of1-10, saved-version skips, independent reader jobs, three-attempt automatic retries and source/settings guards remain. Migration043 applied locally. |
 | Average timings                      | Per-model/language averages across all measured history, with sample count and preparation/guide/generation breakdown. Unmeasured records and manual edits excluded. Range estimates use up to100 recent measured samples for the selected model/language.                                                                                                                                                |
 | Retranslation/history                | Retranslate creates another saved version. Latest20 matching versions are selectable; old rows remain. Cached versions match source ID, URL, text hash and language.                                                                                                                                                                                                                                      |
 | Paragraph formatting                 | Separate paragraphs, blank-line normalization, margins and deliberate internal line breaks. Collapsed multi-paragraph responses are rejected.                                                                                                                                                                                                                                                             |
@@ -60,7 +60,7 @@ live-provider evaluated. Built-in email-link login supports the Free project's d
 
 ### Limits and Research
 
-- Parallel production download workers, unattended recurring schedulers, vector embeddings,
+- Parallel rendered-browser workers, unattended recurring schedulers, vector embeddings,
   recommendation agents, economy provider-Batch mode and whole-book translated exports are not
   built. Immediate grouped/reader queues and bounded automatic recovery are implemented. Starting
   a job authorizes retries; SDK retries remain disabled to avoid multiplying those attempts.
@@ -285,11 +285,12 @@ uncached chapters download automatically, with explicit confirmation before scra
 The reader preserves its typography, settings and previous/next controls and links confirmed reference
 chapters. Saved chapter translations now open in the same reader; downloaded-source bookmarks remain future work.
 
-Ranges default to 1-5 and accept positions up to 20,000; Download all uses the entire saved inventory.
-Both are processed sequentially. Stop takes
-effect after the current chapter; completed chapters persist and retries skip stored text. This is a
-foreground queue, not a durable scheduler. Direct fetch uses the existing pinned public-address
-fetcher with no cookies or redirects, 1 MB/eight-second caps and one-second pacing. Scrapers are
+Ranges start at the first missing chapter and suggest five positions, up to20,000; Download all uses
+the entire saved inventory. Direct fetching uses1-3 workers with no forced one-second backend delay.
+Stop finishes current requests and prevents new dispatch; successes persist and retries skip stored
+text. Browser downloads retain one-tab navigation and separate site pacing. The app queue remains
+foreground, not a durable scheduler. Direct fetch uses the pinned public-address
+fetcher with no cookies or redirects and1MB/eight-second caps. Scrapers are
 revalidated in Docker; one confirmation permits one generation/repair cycle of at most three calls.
 Chapters may span at most five source pages/160,000 text characters/2,000 paragraphs; no partial
 chapter is saved on failed pagination. Obvious verification pages stop before model use.
@@ -306,6 +307,12 @@ Successful direct extraction tests select HTTP automatically; older test results
 manually without rebuilding. URL-only single and bulk jobs use the same authenticated downloader,
 source inventory validation, cached adapters, consent gates and checkpointed batch queue. No tab is
 navigated in direct mode. Paused queues can switch methods after the in-flight job finishes.
+
+The vampire source's755-entry inventory included its homepage as an unnumbered chapter. A guarded
+local metadata repair removed that entry after backup, retaining752 stored chapter paths/hashes and
+the final chapter/afterword at positions753-754. Two read-only guarded fetches verified those last
+URLs without paid model calls. The inventory-discovery regression excludes the parent homepage but
+retains genuine end matter. The repair did not copy files or alter translated text.
 
 Book-page direct extraction tests bypass chapter cache without overwriting text. Forced scraper
 regeneration bypasses adapter reuse but replaces it only on validation success. Direct tests stop on

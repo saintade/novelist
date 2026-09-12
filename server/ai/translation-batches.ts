@@ -131,7 +131,12 @@ async function planRange(
     throw new ExperimentError('Choose an inclusive range of up to 1,000 chapters.', 422)
   if (to > current.listing.length)
     throw new ExperimentError("The range exceeds this book's saved chapter inventory.", 422)
-  const selected = current.listing.slice(from - 1, to)
+  const range = current.listing.slice(from - 1, to)
+  const selected = allUntranslated
+    ? range.filter((chapter) => current.downloaded.has(chapter.key))
+    : range
+  if (!selected.length)
+    throw new ExperimentError('Download at least one chapter before translating.', 422)
   const missing = selected.filter((chapter) => !current.downloaded.has(chapter.key))
   const timings = await client
     .from('book_translation_previews')
@@ -182,6 +187,7 @@ async function planRange(
     from,
     to,
     count,
+    undownloadedCount: allUntranslated ? range.length - selected.length : 0,
     missing: missing
       .slice(0, 10)
       .map((chapter) => ({ position: chapter.position, title: chapter.title })),
@@ -431,6 +437,11 @@ export class TranslationBatchManager {
       )
       if (plan.from !== input.from || plan.to !== input.to)
         throw new ExperimentError('The chapter inventory changed. Review the job again.', 409)
+      if (input.expectedCount !== undefined && plan.count !== input.expectedCount)
+        throw new ExperimentError(
+          'The downloaded chapters changed. Review the translation job again.',
+          409,
+        )
       if (plan.missingCount)
         throw new ExperimentError('Download every chapter in this range first.', 422)
       if (plan.revision !== input.expectedRevision)

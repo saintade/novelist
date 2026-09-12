@@ -7,6 +7,7 @@ import {
   Play,
   FlaskConical,
   RotateCw,
+  SkipForward,
 } from 'lucide-react'
 import type {
   ReadingSource,
@@ -33,10 +34,19 @@ export function DownloadRange({
   downloaded?: Pick<SourceChapterRow, 'source_id' | 'url'>[]
 }) {
   const [range, setRange] = useState<{ from: number; to: number } | null>(null)
-  const savedUrls = new Set(downloaded.map(chapter => `${chapter.source_id}:${chapter.url}`))
-  const inventory = sources.flatMap(source => sourceInventory(source).map((chapter, position) => ({ ...chapter, sourceId: source.id, position })))
-  const missing = inventory.filter(chapter => !savedUrls.has(`${chapter.sourceId}:${chapter.url}`))
-  const maximum = Math.max(1, ...sources.map(source => sourceInventory(source).length))
+  const [concurrency, setConcurrency] = useState(3)
+  const savedUrls = new Set(downloaded.map((chapter) => `${chapter.source_id}:${chapter.url}`))
+  const inventory = sources.flatMap((source) =>
+    sourceInventory(source).map((chapter, position) => ({
+      ...chapter,
+      sourceId: source.id,
+      position,
+    })),
+  )
+  const missing = inventory.filter(
+    (chapter) => !savedUrls.has(`${chapter.sourceId}:${chapter.url}`),
+  )
+  const maximum = Math.max(1, ...sources.map((source) => sourceInventory(source).length))
   const from = range?.from ?? (missing[0] ? missing[0].position + 1 : maximum)
   const to = range?.to ?? Math.min(maximum, from + 4)
   const [busy, setBusy] = useState(false)
@@ -64,6 +74,7 @@ export function DownloadRange({
   const queue = useRef<{ sourceId: string; url: string; title: string }[]>([])
   const stop = useRef(false)
   const working = useRef(false)
+  const skipped = useRef(0)
   const testSource = sources.find((source) => source.id === testSourceId) ?? sources[0]
   const testChapter = testSource ? sourceInventory(testSource)[testPosition - 1] : undefined
   const shownTest =
@@ -104,31 +115,78 @@ export function DownloadRange({
     setBusy(true)
     setPending(null)
     try {
-      while (queue.current.length && !stop.current) {
-        const current = queue.current[0]
+      const entries = [...queue.current]
+      const failures: {
+        chapter: (typeof entries)[number]
+        result: typeof pending
+        message: string
+      }[] = []
+      const download = async (
+        current: (typeof entries)[number],
+        allowGeneration = false,
+        savedOnly = false,
+      ) => {
         setMessage(`Downloading ${current.title} (${queue.current.length} remaining)`)
-        const result = checkSavedFirst
-          ? await getSavedChapter(current.sourceId, current.url)
-          : await downloadChapter({ sourceId: current.sourceId, url: current.url, confirmed })
-        confirmed = false
-        checkSavedFirst = false
-        if (!result) {
-          setPending(browserRequest)
-          setMessage('Chapter not saved yet.')
-          break
+        try {
+          const result = savedOnly
+            ? await getSavedChapter(current.sourceId, current.url)
+            : await downloadChapter({
+                sourceId: current.sourceId,
+                url: current.url,
+                confirmed: allowGeneration,
+              })
+          if (!result || result.state !== 'ready') {
+            failures.push({
+              chapter: current,
+              result: result ?? browserRequest,
+              message: result ? current.title : 'Chapter not saved yet.',
+            })
+            stop.current = true
+            return
+          }
+          queue.current = queue.current.filter((chapter) => chapter !== current)
+          onSaved()
+        } catch (failure) {
+          failures.push({
+            chapter: current,
+            result: null,
+            message:
+              failure instanceof Error
+                ? failure.message
+                : 'Download failed. Completed chapters are kept.',
+          })
+          stop.current = true
         }
-        if (result.state !== 'ready') {
-          setPending(result)
-          setBrowserUrl(
-            sources.find((source) => source.id === current.sourceId)?.url || current.url,
-          )
-          setMessage(current.title)
-          break
-        }
-        queue.current.shift()
-        onSaved()
       }
-      if (!queue.current.length) setMessage('Selected chapters downloaded.')
+      let next = 0
+      if (entries.length && (confirmed || checkSavedFirst)) {
+        await download(entries[next++], confirmed, checkSavedFirst)
+      }
+      await Promise.all(
+        Array.from({ length: concurrency }, async () => {
+          while (next < entries.length && !stop.current) await download(entries[next++])
+        }),
+      )
+      const failure = failures.sort(
+        (first, second) => entries.indexOf(first.chapter) - entries.indexOf(second.chapter),
+      )[0]
+      if (failure) {
+        queue.current = [
+          failure.chapter,
+          ...queue.current.filter((chapter) => chapter !== failure.chapter),
+        ]
+        setPending(failure.result)
+        setBrowserUrl(
+          sources.find((source) => source.id === failure.chapter.sourceId)?.url ||
+            failure.chapter.url,
+        )
+        setMessage(failure.message)
+      } else if (!queue.current.length)
+        setMessage(
+          skipped.current
+            ? `Selection finished. ${skipped.current} skipped chapters remain unsaved.`
+            : 'Selected chapters downloaded.',
+        )
       else if (stop.current) setMessage('Paused. Completed chapters are kept.')
     } catch (failure) {
       setMessage(
@@ -143,24 +201,44 @@ export function DownloadRange({
     }
   }
   const start = (all: boolean) => {
+    if (working.current || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3)
+      return
+    skipped.current = 0
     queue.current = sources.flatMap((source) => {
       const unique = [
         ...new Map(sourceInventory(source).map((chapter) => [chapter.url, chapter])).values(),
       ]
-      return (all ? unique : unique.slice(from - 1, to)).filter(chapter => !savedUrls.has(`${source.id}:${chapter.url}`)).map((chapter) => ({
-        sourceId: source.id,
-        url: chapter.url,
-        title: `${source.label}: ${chapter.title}`,
-      }))
+      return (all ? unique : unique.slice(from - 1, to))
+        .filter((chapter) => !savedUrls.has(`${source.id}:${chapter.url}`))
+        .map((chapter) => ({
+          sourceId: source.id,
+          url: chapter.url,
+          title: `${source.label}: ${chapter.title}`,
+        }))
     })
     void process()
   }
   return (
     <section className="source-downloads" aria-label="Chapter downloads">
       <div className="download-summary">
-        <div><h2>{inventory.length - missing.length} <span>/ {inventory.length} chapters saved</span></h2><p>{missing[0] ? `Next missing: ${missing[0].title}` : inventory.length ? 'All indexed chapters are downloaded.' : 'No chapters indexed.'}</p></div>
+        <div>
+          <h2>
+            {inventory.length - missing.length} <span>/ {inventory.length} chapters saved</span>
+          </h2>
+          <p>
+            {missing[0]
+              ? `Next missing: ${missing[0].title}`
+              : inventory.length
+                ? 'All indexed chapters are downloaded.'
+                : 'No chapters indexed.'}
+          </p>
+        </div>
         <span className="download-remaining">{missing.length} remaining</span>
-        <progress aria-label="Saved source chapters" max={Math.max(1, inventory.length)} value={inventory.length - missing.length} />
+        <progress
+          aria-label="Saved source chapters"
+          max={Math.max(1, inventory.length)}
+          value={inventory.length - missing.length}
+        />
       </div>
       <div className="source-download-controls">
         <label>
@@ -185,10 +263,25 @@ export function DownloadRange({
             onChange={(event) => setRange({ from, to: Number(event.target.value) })}
           />
         </label>
+        <label>
+          Concurrent downloads
+          <input
+            type="number"
+            min={1}
+            max={3}
+            step={1}
+            value={concurrency}
+            disabled={busy}
+            onChange={(event) => setConcurrency(Number(event.target.value))}
+          />
+        </label>
         <button
           className="button"
           disabled={
             busy ||
+            !Number.isInteger(concurrency) ||
+            concurrency < 1 ||
+            concurrency > 3 ||
             !missing.length ||
             !sources.length ||
             !Number.isInteger(from) ||
@@ -204,9 +297,15 @@ export function DownloadRange({
         </button>
         <button
           className="button"
-          disabled={busy || !sources.some((source) => sourceInventory(source).length)}
+          disabled={
+            busy ||
+            !Number.isInteger(concurrency) ||
+            concurrency < 1 ||
+            concurrency > 3 ||
+            !sources.some((source) => sourceInventory(source).length)
+          }
           onClick={() => start(true)}
-          title="Fetch all chapter URLs directly, sequentially. Skip saved text and pause if browser access or model approval is needed."
+          title="Fetch chapter URLs directly with bounded concurrency. Skip saved text and stop new requests if browser access or model approval is needed."
         >
           <Download size={16} />
           Download all{sources.length > 1 ? ' from both sources' : ''}
@@ -219,7 +318,7 @@ export function DownloadRange({
             }}
           >
             <Square size={15} />
-            Stop after chapter
+            Stop after current downloads
           </button>
         )}
       </div>
@@ -269,9 +368,27 @@ export function DownloadRange({
                 <Play size={16} />
                 Resume downloads
               </button>
+              <button className="button" disabled={busy} onClick={() => void process()}>
+                <RotateCw size={16} />
+                Retry direct download
+              </button>
             </div>
           )}
         </div>
+      )}
+      {!busy && remaining > 0 && (
+        <button
+          className="button"
+          onClick={() => {
+            queue.current.shift()
+            skipped.current += 1
+            setPending(null)
+            void process()
+          }}
+        >
+          <SkipForward size={16} />
+          Skip chapter & continue
+        </button>
       )}
       <section className="extraction-controls" aria-label="Extraction tools">
         <h2>Extraction tools</h2>

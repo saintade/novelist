@@ -169,8 +169,10 @@ Open the book's **Downloads** tab for direct batch controls and extraction tools
 Opening a chapter downloads it if needed, then opens its text in Novelist. Stored chapters are
 reused without another site request. **Download range** starts at the first missing chapter and suggests
 the next five positions; **Download all** includes the full saved inventory. Both skip saved URLs,
-run sequentially and can stop
-after the current chapter. **Resume downloads** keeps the queue while the page stays open; after reload,
+with **Concurrent downloads** configurable from1-3 (default3). Direct fetches have no forced
+one-second delay; the server admits at most3 chapter operations and2 sandbox extractions at once.
+Duplicate chapter requests serialize and recheck the cache rather than extracting twice. Stop
+finishes current downloads without dispatching more. **Resume downloads** keeps the queue while the page stays open; after reload,
 rerun the range or all to skip completed chapters. This is not an unattended background scheduler.
 
 In Downloads, **Extraction tools** offers a free **Test direct fetch** against a selected
@@ -186,8 +188,12 @@ sends saved chapter URLs to asynchronous server jobs and never opens or captures
 successful direct extraction test selects it automatically for subsequent downloads. Pause before
 switching methods, then resume the same queue. Failed direct access pauses instead of silently navigating
 the browser. Cached scrapers are reused without a model call for each chapter.
-**Bulk downloads** contains the all/range controls. Both modes remain sequential. There is no
-production concurrent-workers setting; the earlier parallel experiment was a local benchmark.
+**Bulk downloads** contains the all/range and concurrency controls. Direct mode runs up to3 jobs
+with a per-site0-60second start delay, default0 for a new direct-fetch site. Browser mode retains
+one source tab and1-60second pacing. Previously saved per-site pacing is preserved. Concurrent
+results and pending job IDs are checkpointed by URL, so out-of-order completion survives a panel
+restart or network interruption. Access challenges stop new requests; in-flight successful chapters
+are retained and extension pacing increases before an explicit resume.
 
 To remove a source, open **Translation > Metadata** and use its trash icon. Confirmation removes the
 source inventory, downloaded source text, source reading progress and pairings. The novel, other
@@ -210,11 +216,19 @@ reader opens the paired source page; its tooltip describes the extension action.
 Chrome/Edge library session. Returning to Novelist checks saved text and opens the chapter without
 retrying the blocked HTTP request; **Check saved chapter** performs that check manually. For a paused
 range, **Resume downloads** checks the blocked chapter is saved before continuing. Neither check
-fetches the blocked page or starts AI when the text is still missing. Scan & save chapters remains
+fetches the blocked page or starts AI when the text is still missing. **Retry direct download** makes
+an explicitly requested fresh attempt. **Skip chapter & continue** leaves that chapter unsaved and
+continues the selection; it does not delete its inventory entry or pretend the book is complete.
+Scan & save chapters remains
 link-only; it does not save chapter text. Do not bypass login, CAPTCHA or access restrictions.
 On 2026-09-11 the guarded live fetch
 accepted Freewebnovel chapter one (31,232 filtered HTML characters), while 101kks returned HTTP 403
 and required browser capture. No model call was made for that access check.
+
+The vampire source's755-entry inventory incorrectly included its book homepage as an unnumbered
+chapter. It was backed up and repaired to754 entries, preserving all752 saved chapters and their
+hashes/paths. Only the final chapter and afterword remained; both passed guarded public fetches.
+Directory discovery now excludes these homepage links while retaining real unnumbered end matter.
 
 ## Translation Settings
 
@@ -302,20 +316,24 @@ Raw model completion/refusal status is checked before parsing the JSON. Incomple
 publishes a partial chapter. Output ceilings are16,384 for a chapter,8,192 for metadata or a guide,
 12,000 for standalone noun extraction, and4,096 for a contextual term suggestion. These are ceilings,
 not guaranteed sufficiency for arbitrary text. A limit hit, timeout, rate limit, credential problem
-or save conflict is reported explicitly. There is no automatic paid retry; saved versions retain
+or save conflict is reported explicitly. Translation jobs use the bounded retry policy below; saved versions retain
 provider completion and token-usage metadata. Semantic omissions still require reading/review.
 
 `NOVELIST_AI_CONCURRENCY` defaults to8 (maximum32); `NOVELIST_AI_REQUESTS_PER_HOUR=0` disables the
-optional hourly cap. This does not change sequential site-download pacing or Docker limits.
+optional hourly cap. Model capacity is separate from download concurrency and sandbox limits.
+Download admission is separate from AI request slots; cached extractor checks consume no model slot.
 
 ## Mass Translation
 
 1. Open a source book and its **Translate** tab. Download the original chapters first under
    **Downloads** and save the book's translation preferences if prompted.
-2. Choose **Translate untranslated** for the entire indexed book, or set **From chapter** and
+2. Choose **Translate untranslated** for every downloaded chapter in the indexed book, or set **From chapter** and
   **To chapter**, then **Review translation range**. Manual ranges are inclusive, up to1,000
-  chapters; whole-book jobs support the20,000-chapter inventory limit. All originals must be
-  downloaded first. **Chapters per request (maximum)** defaults to10 and accepts1-10.
+  chapters; whole-book jobs support the20,000-chapter inventory limit and exclude missing originals
+  instead of blocking the job. Valid saved translations are skipped. Original chapter positions are
+  retained even when downloads have gaps. Manual ranges still require all selected originals.
+  **Chapters per request (maximum)** defaults to10 and accepts1-10. The cost review lists downloaded
+  chapters and exclusions; changes to the selected count require a fresh review.
 3. Review the model/language, existing versions, missing downloads, request count and cost estimate.
    Confirm billable usage, then choose **Start translations**. Merely opening/reviewing makes no
    model request. The estimate includes selected chapters before skips; actual cost can be lower.
@@ -457,7 +475,8 @@ There is one Open in Novelist link; analysis settings, references and reports ar
 **Bulk downloads** in the extension offers **Download all** and an inclusive **Download range**
 for the current paired source. Both use the full unique chapter list, not the search-filtered subset.
 All means all indexed links, up to the existing 20,000-link inventory limit; scan the contents first
-and check any partial-list warning. Downloads run sequentially through the source tab, skip already
+and check any partial-list warning. Direct downloads run with1-3 workers; rendered downloads use
+one source tab. Both skip already
 stored chapter URLs, and show saved/skipped counts. **Pause downloads** keeps completed work;
 **Resume downloads** continues from the checkpoint. Model generation/repair pauses for consent on
 the current chapter only. Keep the source tab, local app and Docker running. Panel/worker restarts

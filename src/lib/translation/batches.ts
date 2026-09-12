@@ -11,6 +11,7 @@ export const translationBatchRequestSchema = z
     from: z.number().int().min(1).max(20000).optional(),
     to: z.number().int().min(1).max(20000).optional(),
     expectedRevision: z.number().int().nonnegative().optional(),
+    expectedCount: z.number().int().min(1).max(20000).optional(),
     confirmed: z.boolean().default(false),
     retryFailed: z.boolean().default(false),
     chaptersPerRequest: z.number().int().min(1).max(10).default(1),
@@ -41,6 +42,7 @@ export interface TranslationBatchPlan extends TranslationBatchOverview {
   from: number
   to: number
   count: number
+  undownloadedCount: number
   missing: { position: number; title: string }[]
   missingCount: number
   savedCandidates: number

@@ -26,6 +26,7 @@ import {
   DEFAULT_ORIGIN,
   localAppOrigin,
   panelMessageSchema,
+  hasChapterJobs,
   type PanelState,
   type StoredState,
   type ChapterDownloadBatch,
@@ -39,7 +40,7 @@ import type {
 } from '../src/lib/extension/contracts'
 
 const stored = async () => (await chrome.storage.session.get(null)) as StoredState
-const downloadPacingSchema = z.record(z.string(), z.number().int().min(1).max(60)).catch({})
+const downloadPacingSchema = z.record(z.string(), z.number().int().min(0).max(60)).catch({})
 const downloadMethodsSchema = z.record(z.string(), z.enum(['browser', 'http'])).catch({})
 let navigationTask: Promise<unknown> | undefined
 let navigationStopped = false
@@ -67,17 +68,19 @@ async function panelState(): Promise<PanelState> {
   ])
   const preference = analysisModelSchema.safeParse(preferences.analysisModel)
   const pacing = downloadPacingSchema.parse(preferences.downloadPacing)
+  const sourceOrigin = state.capture ? new URL(state.capture.page.url).origin : ''
+  const transport =
+    downloadMethodsSchema.parse(preferences.downloadMethods)[sourceOrigin] ?? 'browser'
   return {
     ...state,
     backendOrigin: await origin(),
     autoConnect: preferences.autoConnectPaused !== true,
     preferredAnalysisModel: preference.success ? preference.data : undefined,
-    downloadDelaySeconds: state.capture ? (pacing[new URL(state.capture.page.url).origin] ?? 1) : 1,
-    downloadTransport: state.capture
-      ? (downloadMethodsSchema.parse(preferences.downloadMethods)[
-          new URL(state.capture.page.url).origin
-        ] ?? 'browser')
-      : 'browser',
+    downloadDelaySeconds: Math.max(
+      transport === 'http' ? 0 : 1,
+      pacing[sourceOrigin] ?? (transport === 'http' ? 0 : 1),
+    ),
+    downloadTransport: transport,
     connected: Boolean(
       connection &&
       connection.expiresAt > Date.now() &&
@@ -269,13 +272,186 @@ async function rememberChapterAliases(sourceUrl: string, aliases: unknown) {
 }
 
 function canonicalizeBatch(batch: ChapterDownloadBatch, aliases: unknown) {
-  const processed = batch.urls.slice(0, batch.next)
-  const previous = new Set(processed)
-  const remaining = batch.urls.slice(batch.next).map((url) => canonicalChapterUrl(url, aliases))
-  batch.urls = [...processed, ...new Set(remaining.filter((url) => !previous.has(url)))]
+  const completed = new Set(
+    (batch.completedUrls ?? batch.urls.slice(0, batch.next)).map((url) =>
+      canonicalChapterUrl(url, aliases),
+    ),
+  )
+  const pendingUrls = Object.keys(batch.jobs ?? {})
+  if (batch.jobId && batch.urls[batch.next]) pendingUrls.push(batch.urls[batch.next])
+  for (const url of pendingUrls) completed.delete(canonicalChapterUrl(url, aliases))
+  batch.urls = [...new Set(batch.urls.map((url) => canonicalChapterUrl(url, aliases)))]
+  batch.completedUrls = [...completed]
+  const next = batch.urls.findIndex((url) => !completed.has(url))
+  batch.next = next < 0 ? batch.urls.length : next
+}
+
+function completeBatchChapter(batch: ChapterDownloadBatch, url: string, cached: boolean) {
+  const completed = new Set(batch.completedUrls ?? batch.urls.slice(0, batch.next))
+  if (!completed.has(url)) {
+    completed.add(url)
+    if (cached) batch.skipped++
+    else batch.saved++
+  }
+  batch.completedUrls = [...completed]
+  const next = batch.urls.findIndex((chapter) => !completed.has(chapter))
+  batch.next = next < 0 ? batch.urls.length : next
+}
+
+async function pollDownloadJob(jobId: string): Promise<ExtensionJob> {
+  const deadline = Date.now() + 240_000
+  for (;;) {
+    const job = (await api(`jobs/${encodeURIComponent(jobId)}`)) as ExtensionJob
+    if (job.state !== 'running') return job
+    if (Date.now() >= deadline)
+      throw new Error(
+        'This chapter is still processing. Resume to check the existing job; no new model request will be sent.',
+      )
+    await pauseDownload(500)
+  }
+}
+
+async function runDirectChapterBatch(batch: ChapterDownloadBatch, confirmed: boolean) {
+  batch.timing ??= { browserMs: 0, browserPages: 0, processingMs: 0, processingJobs: 0 }
+  batch.jobs ??= {}
+  if (batch.jobId) {
+    batch.jobs[batch.urls[batch.next]] = batch.jobId
+    delete batch.jobId
+  }
+  let publications = Promise.resolve()
+  const publish = () => {
+    const snapshot = structuredClone(batch)
+    publications = publications.then(async () => {
+      const current = (await chrome.storage.session.get('chapterBatch')).chapterBatch as
+        ChapterDownloadBatch | undefined
+      if (current?.id === batch.id) await chrome.storage.session.set({ chapterBatch: snapshot })
+    })
+    return publications
+  }
+  let halted = false
+  const failures: {
+    url: string
+    state: 'paused' | 'needs_browser' | 'needs_scraper'
+    message: string
+  }[] = []
+  try {
+    const approvedUrl = confirmed ? batch.urls[batch.next] : undefined
+    const cached: { urls: string[]; aliases?: unknown } = hasChapterJobs(batch)
+      ? { urls: [] }
+      : await api('library/downloaded', 'POST', {
+          bookId: batch.bookId,
+          sourceUrl: batch.sourceUrl,
+        })
+    let aliases = cached.aliases
+    canonicalizeBatch(batch, aliases)
+    await rememberChapterAliases(batch.sourceUrl, aliases)
+    const state = await stored()
+    const choices =
+      state.inspection?.contents?.chapters ?? state.inspection?.inspection.chapterLinks ?? []
+    for (const url of cached.urls)
+      if (batch.urls.includes(url)) completeBatchChapter(batch, url, true)
+    await publish()
+    let nextStart = Date.now()
+    const download = async (requestedUrl: string, allowGeneration = false) => {
+      const url = canonicalChapterUrl(requestedUrl, aliases)
+      let jobId = batch.jobs![requestedUrl]
+      if (!jobId && (batch.completedUrls?.includes(url) || halted || downloadsPaused)) return
+      try {
+        if (!jobId) {
+          const startAt = Math.max(Date.now(), nextStart)
+          nextStart = startAt + (batch.delaySeconds ?? 0) * 1000
+          while (Date.now() < startAt && !halted && !downloadsPaused)
+            await pauseDownload(Math.min(250, startAt - Date.now()))
+          if (halted || downloadsPaused) return
+          batch.message = `Downloading chapter ${batch.from + batch.urls.indexOf(url)}`
+          const operation = await api('library/chapter/start', 'POST', {
+            bookId: batch.bookId,
+            sourceUrl: batch.sourceUrl,
+            requestedUrl: url,
+            confirmed: allowGeneration,
+          })
+          jobId = operation.id as string
+          batch.jobs![requestedUrl] = jobId
+          await publish()
+        }
+        const started = Date.now()
+        const job = await pollDownloadJob(jobId)
+        batch.timing!.processingMs += Date.now() - started
+        batch.timing!.processingJobs++
+        delete batch.jobs![requestedUrl]
+        await api(`jobs/${encodeURIComponent(jobId)}`, 'DELETE').catch(() => undefined)
+        if (job.state === 'failed' || !job.download)
+          throw new Error(job.error || 'Chapter extraction did not return a result.')
+        const canonical = job.download.canonicalUrl ?? url
+        if (canonical !== url) {
+          resolveChapterDestination(url, canonical, choices)
+          aliases = { ...(aliases && typeof aliases === 'object' ? aliases : {}), [url]: canonical }
+          canonicalizeBatch(batch, aliases)
+          await rememberChapterAliases(batch.sourceUrl, { [url]: canonical })
+        }
+        if (job.download.state !== 'ready') {
+          halted = true
+          const firstChallenge =
+            job.download.state === 'needs_browser' &&
+            !failures.some((failure) => failure.state === 'needs_browser')
+          failures.push({ url, state: job.download.state, message: job.download.message })
+          if (firstChallenge) {
+            batch.accessChallenges = (batch.accessChallenges ?? 0) + 1
+            batch.delaySeconds = Math.min(60, Math.max(5, (batch.delaySeconds ?? 0) * 2))
+            await rememberDownloadPacing(batch.sourceUrl, batch.delaySeconds)
+          }
+        } else completeBatchChapter(batch, canonical, job.download.cached)
+      } catch (failure) {
+        halted = true
+        if (jobId && failure instanceof LocalRequestError && failure.status === 404)
+          delete batch.jobs![requestedUrl]
+        failures.push({
+          url,
+          state: 'paused',
+          message:
+            failure instanceof Error
+              ? failure.message
+              : 'The direct download stopped. Saved chapters are kept.',
+        })
+      }
+      await publish()
+    }
+    if (approvedUrl) await download(approvedUrl, true)
+    const entries = [
+      ...new Set([
+        ...Object.keys(batch.jobs),
+        ...batch.urls.filter((url) => !batch.completedUrls?.includes(url)),
+      ]),
+    ]
+    let cursor = 0
+    const concurrency = Math.max(1, Math.min(3, batch.concurrency ?? 3))
+    await Promise.all(
+      Array.from({ length: concurrency }, async () => {
+        while (cursor < entries.length && !halted && !downloadsPaused)
+          await download(entries[cursor++])
+      }),
+    )
+    const failure = failures.length
+      ? failures.sort(
+          (first, second) => batch.urls.indexOf(first.url) - batch.urls.indexOf(second.url),
+        )[0]
+      : undefined
+    batch.state = failure?.state ?? (batch.next === batch.urls.length ? 'completed' : 'paused')
+    batch.message =
+      failure?.message ??
+      (batch.state === 'completed' ? 'Downloads complete.' : 'Paused. Saved chapters are kept.')
+  } catch (failure) {
+    batch.state = 'paused'
+    batch.message =
+      failure instanceof Error
+        ? failure.message
+        : 'Direct downloads stopped. Saved chapters are kept.'
+  }
+  await publish()
 }
 
 async function runChapterBatch(batch: ChapterDownloadBatch, confirmed: boolean) {
+  if (batch.transport === 'http') return runDirectChapterBatch(batch, confirmed)
   const publish = () => chrome.storage.session.set({ chapterBatch: { ...batch } })
   batch.timing ??= { browserMs: 0, browserPages: 0, processingMs: 0, processingJobs: 0 }
   const browser = browserNavigation(
@@ -301,24 +477,20 @@ async function runChapterBatch(batch: ChapterDownloadBatch, confirmed: boolean) 
       const url = batch.urls[batch.next]
       if (!batch.jobId && storedUrls.has(url)) {
         confirmed = false
-        batch.skipped++
-        batch.next++
+        completeBatchChapter(batch, url, true)
         await publish()
         continue
       }
       batch.message = `Downloading chapter ${batch.from + batch.next}`
       await publish()
       if (!batch.jobId) {
-        let page: ExtensionPageCapture['page'] | undefined
-        if (batch.transport !== 'http') {
-          const navigationStarted = Date.now()
-          await browser.open(url)
-          page = await browser.capture()
-          batch.timing.browserMs += Date.now() - navigationStarted
-          batch.timing.browserPages++
-          if (downloadsPaused) break
-          resolveChapterDestination(url, page.url, choices)
-        }
+        const navigationStarted = Date.now()
+        await browser.open(url)
+        const page = await browser.capture()
+        batch.timing.browserMs += Date.now() - navigationStarted
+        batch.timing.browserPages++
+        if (downloadsPaused) break
+        resolveChapterDestination(url, page.url, choices)
         const operation = await api('library/chapter/start', 'POST', {
           bookId: batch.bookId,
           sourceUrl: batch.sourceUrl,
@@ -352,7 +524,7 @@ async function runChapterBatch(batch: ChapterDownloadBatch, confirmed: boolean) 
       const canonical = job.download.canonicalUrl ?? url
       if (canonical !== url) {
         resolveChapterDestination(url, canonical, choices)
-        const alreadyProcessed = batch.urls.slice(0, batch.next).includes(canonical)
+        const alreadyProcessed = batch.completedUrls?.includes(canonical)
         canonicalizeBatch(batch, { [url]: canonical })
         await rememberChapterAliases(batch.sourceUrl, { [url]: canonical })
         if (alreadyProcessed && job.download.state === 'ready') {
@@ -366,10 +538,8 @@ async function runChapterBatch(batch: ChapterDownloadBatch, confirmed: boolean) 
         await publish()
         return
       }
-      if (job.download.cached) batch.skipped++
-      else batch.saved++
+      completeBatchChapter(batch, canonical, job.download.cached)
       storedUrls.add(canonical)
-      batch.next++
       await publish()
       if (batch.next < batch.urls.length && !downloadsPaused) {
         const delaySeconds = batch.delaySeconds ?? 1
@@ -840,12 +1010,19 @@ async function handlePanel(value: unknown) {
     case 'set-download-transport': {
       const state = await stored()
       if (!state.capture) throw new Error('Capture a source first.')
-      if (state.job?.state === 'running' || state.chapterBatch?.jobId)
+      if (state.job?.state === 'running' || hasChapterJobs(state.chapterBatch))
         throw new Error('Wait for the current chapter job before switching download method.')
       await rememberDownloadMethod(state.capture.page.url, message.transport)
       if (state.chapterBatch && state.chapterBatch.sourceUrl === state.savedSource?.url) {
         await chrome.storage.session.set({
-          chapterBatch: { ...state.chapterBatch, transport: message.transport },
+          chapterBatch: {
+            ...state.chapterBatch,
+            transport: message.transport,
+            delaySeconds: Math.max(
+              message.transport === 'http' ? 0 : 1,
+              state.chapterBatch.delaySeconds ?? 0,
+            ),
+          },
         })
       }
       break
@@ -865,7 +1042,7 @@ async function handlePanel(value: unknown) {
         throw new Error('Scan and save, or pair this source before downloading.')
       if (state.job?.state === 'running' || state.capturing)
         throw new Error('Wait for the current operation to finish.')
-      if (state.chapterBatch?.jobId)
+      if (hasChapterJobs(state.chapterBatch))
         throw new Error('Resume the pending chapter job before starting a new batch.')
       if (message.mode === 'range' && (message.from === undefined || message.to === undefined))
         throw new Error('Choose a download range.')
@@ -878,7 +1055,10 @@ async function handlePanel(value: unknown) {
       if (choices.length > CONTENTS_LINK_LIMIT)
         throw new Error('The chapter list exceeds the download queue limit.')
       const pacing = await panelState()
-      const delaySeconds = message.delaySeconds ?? pacing.downloadDelaySeconds ?? 1
+      const delaySeconds = Math.max(
+        pacing.downloadTransport === 'http' ? 0 : 1,
+        message.delaySeconds ?? pacing.downloadDelaySeconds ?? 0,
+      )
       await rememberDownloadPacing(state.savedSource.url, delaySeconds)
       launchChapterBatch({
         id: crypto.randomUUID(),
@@ -895,6 +1075,7 @@ async function handlePanel(value: unknown) {
         state: 'running',
         message: '',
         delaySeconds,
+        concurrency: message.concurrency ?? 3,
         transport: pacing.downloadTransport ?? 'browser',
       })
       break
@@ -919,9 +1100,10 @@ async function handlePanel(value: unknown) {
       if (message.confirmed && batch.state !== 'needs_scraper')
         throw new Error('No chapter is waiting for model confirmation.')
       if (message.delaySeconds !== undefined) {
-        batch.delaySeconds = message.delaySeconds
-        await rememberDownloadPacing(batch.sourceUrl, message.delaySeconds)
+        batch.delaySeconds = Math.max(batch.transport === 'http' ? 0 : 1, message.delaySeconds)
+        await rememberDownloadPacing(batch.sourceUrl, batch.delaySeconds)
       }
+      if (message.concurrency !== undefined) batch.concurrency = message.concurrency
       launchChapterBatch(batch, message.confirmed)
       break
     }

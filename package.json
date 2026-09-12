@@ -45,6 +45,7 @@
     "ipaddr.js": "2.5.0",
     "lucide-react": "^1.43.0",
     "openai": "^7.13.0",
+    "p-limit": "7.3.2",
     "pg": "8.23.0",
     "pluralize": "8.0.0",
     "react": "^19.2.8",

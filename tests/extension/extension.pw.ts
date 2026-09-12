@@ -56,7 +56,8 @@ async function setup({
   const downloadAliases = new Map<string, Record<string, string>>()
   let holdDownloads = false
   let modelChapter: string | null = null
-  const heldDownloads: (() => void)[] = []
+  let browserChapter: string | null = null
+  const heldDownloads: { url: string; complete: () => void }[] = []
   let savedNavigation: unknown[] = []
   const library: LibraryEntry[] = [
     {
@@ -293,7 +294,9 @@ async function setup({
         })
       const complete = () => {
         job.state = 'completed'
-        if (chapterUrl === modelChapter && !body.confirmed)
+        if (chapterUrl === browserChapter)
+          job.download = { state: 'needs_browser', message: 'The source requires manual browser verification.' }
+        else if (chapterUrl === modelChapter && !body.confirmed)
           job.download = { state: 'needs_scraper', message: 'This chapter needs a scraper repair.' }
         else {
           const saved = downloadedUrls.get(body.sourceUrl) ?? new Set<string>()
@@ -307,7 +310,7 @@ async function setup({
           downloadedUrls.set(body.sourceUrl, saved)
         }
       }
-      if (holdDownloads) heldDownloads.push(complete)
+      if (holdDownloads) heldDownloads.push({ url: chapterUrl, complete })
       else complete()
       json({ id }, 202)
       return
@@ -540,12 +543,20 @@ async function setup({
     holdDownloads: () => {
       holdDownloads = true
     },
+    releaseDownload: (url: string) => {
+      const index = heldDownloads.findIndex(download => download.url === url)
+      if (index < 0) throw new Error('The fixture download has not started')
+      heldDownloads.splice(index, 1)[0].complete()
+    },
     releaseDownloads: () => {
       holdDownloads = false
-      heldDownloads.splice(0).forEach((complete) => complete())
+      heldDownloads.splice(0).forEach(download => download.complete())
     },
     requireChapterModel: (url: string) => {
       modelChapter = url
+    },
+    requireChapterBrowser: (url: string) => {
+      browserChapter = url
     },
     invalidateConnection: () => {
       connectionInvalidated = true
@@ -894,6 +905,7 @@ test('installed extension pairs, identifies a page, confirms selected chapter te
       requests.filter((request) => request.path.endsWith('/chapter/start')).at(-1)!.body,
     ).not.toHaveProperty('page')
     extension.holdDownloads()
+    await panel.getByLabel('Concurrent downloads', { exact: true }).fill('1')
     await panel.getByRole('button', { name: 'Download all', exact: true }).click()
     await expect
       .poll(() => requests.filter((request) => request.path.endsWith('/chapter/start')).length)
@@ -926,6 +938,77 @@ test('installed extension pairs, identifies a page, confirms selected chapter te
   } finally {
     await extension.close()
   }
+})
+
+test('concurrent direct downloads retain out-of-order results, resume jobs and stop on verification', async () => {
+  const extension = await setup({ browserAccess: true })
+  const { context, panel, worker, inspection, library, backendOrigin, requests } = extension
+  const sourceUrl = 'https://books.example.test/concurrent-fetch/'
+  const urls = [1, 2, 3, 4, 5].map(number => `${sourceUrl}chapter-${number}`)
+  inspection.indexUrl = sourceUrl
+  inspection.chapterCount = urls.length
+  inspection.chapterLinks = urls.map((url, index) => ({ url, title: `Chapter ${index + 1}` }))
+  library[0].sources.push({ id: 'concurrent-source', url: sourceUrl, role: 'original', language: 'zh', label: 'Concurrent source' })
+  try {
+    const sourcePage = await context.newPage()
+    await sourcePage.route(`${sourceUrl}**`, route => route.fulfill({ contentType: 'text/html', body: `<h1>Book</h1>${inspection.chapterLinks.map(chapter => `<a href="${chapter.url}">${chapter.title}</a>`).join('')}` }))
+    await sourcePage.goto(sourceUrl)
+    await worker.evaluate(async ({ sourceUrl, inspection, backendOrigin }) => {
+      const tabs = await chrome.tabs.query({ url: sourceUrl })
+      await chrome.storage.local.set({ backendOrigin, downloadMethods: { [new URL(sourceUrl).origin]: 'http' } })
+      await chrome.storage.session.set({
+        connection: { token: 'test-extension-token', expiresAt: Date.now() + 100000 },
+        capture: { page: { url: sourceUrl, html: '<h1>Book</h1>' }, pageTitle: 'Book', preview: '', tabId: tabs[0].id, capturedAt: 'concurrent-capture' },
+        inspection: { inspection, sourceUrl, recordId: '195683d2-3a97-46e9-b0df-25f9991957cf', model: 'test-only', inputTokens: 0, outputTokens: 0 },
+      })
+    }, { sourceUrl, inspection, backendOrigin })
+    await panel.reload()
+    await expect(panel.getByText('In your library', { exact: true })).toBeVisible()
+    await expect(panel.getByLabel('Concurrent downloads', { exact: true })).toHaveValue('3')
+    await expect(panel.getByLabel('Seconds between chapters', { exact: true })).toHaveValue('0')
+    extension.holdDownloads()
+    await panel.getByRole('button', { name: 'Download all', exact: true }).click()
+    const starts = () => requests.filter(request => request.path.endsWith('/chapter/start'))
+    await expect.poll(() => starts().length).toBe(3)
+    expect(starts().every(request => !request.body?.page && request.body?.confirmed === false)).toBe(true)
+    extension.releaseDownload(urls[2])
+    await expect.poll(() => starts().length).toBe(4)
+    const checkpoint = () => worker.evaluate(async () => {
+      const batch = (await chrome.storage.session.get('chapterBatch')).chapterBatch
+      return { next: batch.next, completed: batch.completedUrls, pendingJobs: Object.keys(batch.jobs ?? {}).length, state: batch.state, accessChallenges: batch.accessChallenges, delaySeconds: batch.delaySeconds }
+    })
+    await expect.poll(checkpoint).toMatchObject({ next: 0, completed: [urls[2]], pendingJobs: 3, state: 'running' })
+    await panel.getByRole('button', { name: 'Pause downloads', exact: true }).click()
+    extension.setBackendAvailable(false)
+    await expect.poll(checkpoint).toMatchObject({ next: 0, completed: [urls[2]], pendingJobs: 3, state: 'paused' })
+    extension.setBackendAvailable(true)
+    await panel.reload()
+    const progress = panel.getByRole('region', { name: 'Batch download progress' })
+    await expect(progress).toContainText('1 / 5 processed / 1 saved')
+    await panel.getByRole('button', { name: 'Resume downloads', exact: true }).click()
+    extension.releaseDownloads()
+    await expect(progress).toContainText('Downloads complete.')
+    await expect(progress).toContainText('5 / 5 processed / 5 saved')
+    expect(starts()).toHaveLength(5)
+    expect(new Set(starts().map(request => request.body!.requestedUrl)).size).toBe(5)
+    expect(sourcePage.url()).toBe(sourceUrl)
+    await expect.poll(checkpoint).toMatchObject({ next: 5, pendingJobs: 0, state: 'completed' })
+    expect(await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    extension.downloadedUrls.get(sourceUrl)!.clear()
+    extension.requireChapterBrowser(urls[0])
+    extension.holdDownloads()
+    await panel.getByRole('button', { name: 'Download all', exact: true }).click()
+    await expect.poll(() => starts().length).toBe(8)
+    extension.releaseDownload(urls[0])
+    await expect.poll(checkpoint).toMatchObject({ state: 'running', accessChallenges: 1, delaySeconds: 5, pendingJobs: 2 })
+    extension.releaseDownloads()
+    await expect.poll(checkpoint).toMatchObject({ next: 0, state: 'needs_browser', pendingJobs: 0 })
+    await expect(progress).toContainText('manual browser verification')
+    await expect(progress).toContainText('2 / 5 processed / 2 saved')
+    expect(starts()).toHaveLength(8)
+    expect(sourcePage.url()).toBe(sourceUrl)
+    await panel.screenshot({ path: test.info().outputPath('concurrent-extension-downloads.png'), fullPage: true })
+  } finally { extension.setBackendAvailable(true); extension.releaseDownloads(); await extension.close() }
 })
 
 test('auto-connect renews lost sessions, rejects unsolicited handshakes and respects Disconnect', async () => {

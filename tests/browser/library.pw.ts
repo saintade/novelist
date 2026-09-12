@@ -212,6 +212,71 @@ test('translated reading resumes the latest chapter, version and position after 
   await expectNoOverflow(page)
 })
 
+test('direct download ranges run concurrently and can continue past a blocked chapter', async ({ page }, testInfo) => {
+  await page.goto('/')
+  await expect(page.locator('.book-tile')).toHaveCount(4, { timeout: 45000 })
+  const fixture = await page.evaluate(async () => {
+    const clientPath = '/src/lib/supabase/client.ts'
+    const contentsPath = '/src/lib/extension/contents.ts'
+    const { supabase, ensureSession } = await import(clientPath)
+    const { discoverContents } = await import(contentsPath)
+    const owner = await ensureSession()
+    const bookId = crypto.randomUUID().replaceAll('-', '')
+    const sourceUrl = `https://parallel-app.example.test/${bookId}`
+    const book = await supabase.from('books').insert({ id: bookId, title: 'Parallel app downloads', format: 'WEB', source_url: sourceUrl, language: 'en', file_size: 0, import_state: 'ready' })
+    if (book.error) throw new Error(book.error.message)
+    const source = await supabase.from('novel_sources').select('id').eq('book_id', bookId).single()
+    if (source.error) throw new Error(source.error.message)
+    const contents = discoverContents({ url: sourceUrl, title: 'Contents', truncated: false, links: [1, 2, 3, 4].map(number => ({ title: `Chapter ${number}`, url: `${sourceUrl}/${number}` })) }, { chapterLinks: [], chapterCount: 4, indexUrl: sourceUrl })
+    const saved = await supabase.from('novel_sources').update({ contents_data: contents }).eq('id', source.data.id)
+    if (saved.error) throw new Error(saved.error.message)
+    return { bookId, sourceId: source.data.id, owner }
+  })
+  let release!: () => void
+  const firstWave = new Promise<void>(resolve => { release = resolve })
+  const requests: string[] = []
+  await page.route('**/api/ai/source-chapter', async route => {
+    const input = route.request().postDataJSON()
+    requests.push(input.url)
+    if (requests.length === 3) release()
+    await firstWave
+    if (input.url.endsWith('/1')) {
+      await route.fulfill({ json: { state: 'needs_browser', message: 'Manual browser access required for chapter one.' } })
+      return
+    }
+    const result = await page.evaluate(async ({ input, fixture }) => {
+      const clientPath = '/src/lib/supabase/client.ts'
+      const { supabase } = await import(clientPath)
+      const chapter = { title: 'Chapter', paragraphs: [`Original ${input.url}.`] }
+      const serialized = JSON.stringify(chapter)
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized)))].map(value => value.toString(16).padStart(2, '0')).join('')
+      const path = `${fixture.owner}/sources/${fixture.sourceId}/${hash}.json`
+      const upload = await supabase.storage.from('library').upload(path, new Blob([serialized], { type: 'application/json' }))
+      if (upload.error) throw new Error(upload.error.message)
+      const record = await supabase.from('source_chapters').insert({ source_id: fixture.sourceId, url: input.url, title: chapter.title, content_path: path, content_hash: hash, word_count: 2 }).select('*').single()
+      if (record.error) throw new Error(record.error.message)
+      return { state: 'ready', cached: false, chapter, record: record.data }
+    }, { input, fixture })
+    await route.fulfill({ json: result })
+  })
+  try {
+    await page.goto(`/books/${fixture.bookId}?tab=downloads`)
+    const downloads = page.getByRole('region', { name: 'Chapter downloads', exact: true })
+    await expect(downloads.getByLabel('Concurrent downloads', { exact: true })).toHaveValue('3')
+    await downloads.getByRole('button', { name: 'Download all', exact: true }).click()
+    await expect(downloads.getByRole('alert')).toContainText('Manual browser access required')
+    expect(requests).toHaveLength(3)
+    await expect(downloads.locator('.download-summary')).toContainText('2 / 4 chapters saved')
+    await expect(downloads.getByRole('button', { name: 'Retry direct download', exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('concurrent-download-recovery.png'), fullPage: true })
+    await downloads.getByRole('button', { name: 'Skip chapter & continue', exact: true }).click()
+    await expect(downloads.locator('.download-summary')).toContainText('3 / 4 chapters saved')
+    await expect(downloads.getByRole('status')).toContainText('skipped chapters remain unsaved')
+    expect(requests).toHaveLength(4)
+    await expectNoOverflow(page)
+  } finally { release() }
+})
+
 test('admin usage shows quota failures, monthly alerts and one cost per grouped request', async ({ page }, testInfo) => {
   await page.goto('/')
   await expect(page.locator('.book-tile')).toHaveCount(4, { timeout: 45000 })
@@ -465,9 +530,12 @@ test('bulk translation confirms costs, skips saved chapters and resumes a persis
   await panel.getByRole('spinbutton', { name: 'To chapter', exact: true }).fill('3')
   await panel.getByRole('button', { name: 'Translate untranslated', exact: true }).click()
   const wholeBook = page.getByRole('dialog', { name: 'Translate untranslated chapters', exact: true })
-  await expect(wholeBook).toContainText('Chapters 1-4 / 4 chapters')
-  await expect(wholeBook).toContainText('1 chapter needs downloading first')
+  await expect(wholeBook).toContainText('Chapters 1-4 / 3 chapters')
+  await expect(wholeBook).toContainText('3 downloaded chapters selected. 1 undownloaded chapter excluded.')
   await expect(wholeBook.getByRole('button', { name: 'Start translations', exact: true })).toBeDisabled()
+  await wholeBook.getByRole('checkbox').check()
+  await expect(wholeBook.getByRole('button', { name: 'Start translations', exact: true })).toBeEnabled()
+  await page.screenshot({ path: testInfo.outputPath('downloaded-only-translation.png'), fullPage: true })
   expect(starts).toBe(0)
   await wholeBook.getByRole('button', { name: 'Back', exact: true }).click()
   await panel.getByRole('button', { name: 'Review translation range', exact: true }).click()
@@ -1024,7 +1092,9 @@ test('independent source books support reading, context translation and catalog 
   await expect(page.getByRole('combobox', { name: 'Context use', exact: true })).toHaveValue(
     'continuation',
   )
+  const preferencesSaved = page.waitForResponse(response => response.url().endsWith('/rpc/set_source_translation_settings') && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Save preferences', exact: true }).click()
+  expect((await preferencesSaved).ok()).toBe(true)
   await expect(
     page.locator('.translation-preferences button').filter({ hasText: 'Save preferences' }),
   ).toBeDisabled()
@@ -1653,11 +1723,12 @@ test('independent source books support reading, context translation and catalog 
     if (input.url.endsWith('/3')) await thirdGate
     await route.fulfill({ json: await storeChapter(input) })
   })
+  await page.getByLabel('Concurrent downloads', { exact: true }).fill('1')
   await page.getByRole('button', { name: 'Download all', exact: true }).click()
   await expect.poll(() => directDownloads.length).toBe(1)
   await page.getByRole('tab', { name: 'Metadata', exact: true }).click()
   await page.getByRole('tab', { name: 'Downloads', exact: true }).click()
-  await page.getByRole('button', { name: 'Stop after chapter', exact: true }).click()
+  await page.getByRole('button', { name: 'Stop after current downloads', exact: true }).click()
   releaseThird()
   await expect(
     page.getByRole('status').filter({ hasText: 'Paused. Completed chapters are kept.' }),
