@@ -8,6 +8,7 @@ export interface LibraryContextValue {
   openImport: () => void
   patchBook: (id: string, change: (book: LibraryBook) => LibraryBook) => Promise<boolean>
   deleteBook: (id: string) => Promise<void>
+  rememberSourceReading: (id: string, position: { source: NonNullable<LibraryBook['sourceProgress']>; chapter: number; fraction: number; observedAt: number; finished?: boolean }) => void
   notify: (message: string) => void
 }
 

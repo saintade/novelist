@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Bookmark as BookmarkIcon, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { chapterTitle, type LibraryBook } from '../../lib/books'
 import { Dialog, IconButton } from '../ui'
@@ -13,13 +13,24 @@ interface Props {
 export function ReaderContents({ book, index, onNavigate, onClose }: Props) {
   const [contentsTab, setContentsTab] = useState<'chapters' | 'bookmarks'>('chapters')
   const [chapterSearch, setChapterSearch] = useState('')
-  const [chapterPage, setChapterPage] = useState(0)
+  const [chapterPage, setChapterPage] = useState(() => Math.floor(index / 50))
+  const listRef = useRef<HTMLDivElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
   const chapters = book.chapters
     .map((entry, chapterIndex) => ({ ...entry, index: chapterIndex }))
     .filter((entry) =>
       `${entry.index + 1} ${entry.title}`.toLowerCase().includes(chapterSearch.toLowerCase()),
     )
   const pages = Math.max(1, Math.ceil(chapters.length / 50))
+  const page = Math.min(chapterPage, pages - 1)
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list || contentsTab !== 'chapters') return
+    const active = activeRef.current
+    if (!active) { list.scrollTop = 0; return }
+    const bounds = active.getBoundingClientRect()
+    list.scrollTop += bounds.top - list.getBoundingClientRect().top - (list.clientHeight - bounds.height) / 2
+  }, [index, page, contentsTab, chapterSearch])
   return (
     <Dialog title="Contents" className="drawer drawer-left" onClose={() => onClose()}>
       <p className="drawer-book-title">{book.title}</p>
@@ -49,14 +60,15 @@ export function ReaderContents({ book, index, onNavigate, onClose }: Props) {
               value={chapterSearch}
               onChange={(event) => {
                 setChapterSearch(event.target.value)
-                setChapterPage(0)
+                setChapterPage(event.target.value.trim() ? 0 : Math.floor(index / 50))
               }}
             />
           </label>
-          <div className="drawer-chapters">
-            {chapters.slice(chapterPage * 50, (chapterPage + 1) * 50).map((entry) => (
+          <div className="drawer-chapters" ref={listRef}>
+            {chapters.slice(page * 50, (page + 1) * 50).map((entry) => (
               <button
                 key={entry.id}
+                ref={entry.index === index ? activeRef : undefined}
                 className={`toc-entry ${entry.index === index ? 'active' : ''}`}
                 aria-current={entry.index === index ? 'location' : undefined}
                 onClick={() => onNavigate(entry.index)}
@@ -72,18 +84,18 @@ export function ReaderContents({ book, index, onNavigate, onClose }: Props) {
             <div className="pagination">
               <IconButton
                 label="Previous contents page"
-                disabled={!chapterPage}
-                onClick={() => setChapterPage(chapterPage - 1)}
+                disabled={!page}
+                onClick={() => setChapterPage(page - 1)}
               >
                 <ChevronLeft size={18} />
               </IconButton>
               <span>
-                {chapterPage + 1} / {pages}
+                {page + 1} / {pages}
               </span>
               <IconButton
                 label="Next contents page"
-                disabled={chapterPage >= pages - 1}
-                onClick={() => setChapterPage(chapterPage + 1)}
+                disabled={page >= pages - 1}
+                onClick={() => setChapterPage(page + 1)}
               >
                 <ChevronRight size={18} />
               </IconButton>

@@ -19,12 +19,12 @@ export function ReaderRoute() {
       book={book}
       theme={theme}
       onTheme={setTheme}
-      onProgress={async (id, chapter, offset) => {
-        await patchBook(id, (current) => ({
+      onProgress={async (id, chapter, offset, observedAt) => {
+        await patchBook(id, (current) => observedAt < current.lastReadAt ? current : ({
           ...current,
           status: 'reading',
           progress: { chapter, offset },
-          lastReadAt: Date.now(),
+          lastReadAt: observedAt,
         }))
       }}
       onBookmark={async (id, chapter, offset, existingId) => {

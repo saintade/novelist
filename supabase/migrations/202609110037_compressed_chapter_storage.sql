@@ -1,0 +1,2 @@
+update storage.buckets set allowed_mime_types = array_append(allowed_mime_types,'application/gzip')
+where id = 'library' and allowed_mime_types is not null and not ('application/gzip' = any(allowed_mime_types));

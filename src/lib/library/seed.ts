@@ -1,6 +1,7 @@
 import { importBook } from '../books'
-import { ensureSession, supabase } from '../supabase/client'
+import { ensureSession, requiresPrivateSignIn, supabase } from '../supabase/client'
 import { saveBook } from './repository'
+import { initializeTranslationSample } from '../translation/seed'
 
 const samples = [
   {
@@ -35,6 +36,7 @@ const samples = [
 let initialization: Promise<void> | undefined
 
 export function initializeLibrary(): Promise<void> {
+  if (requiresPrivateSignIn) return ensureSession().then(() => undefined)
   initialization ??= (async () => {
     const ownerId = await ensureSession()
     const { data, error } = await supabase
@@ -43,29 +45,42 @@ export function initializeLibrary(): Promise<void> {
       .eq('owner_id', ownerId)
       .maybeSingle()
     if (error) throw error
-    if (data?.samples_imported) return
-    for (const sample of samples) {
-      const response = await fetch(`/books/${sample.filename}.epub`)
-      if (!response.ok) throw new Error('The sample books could not be loaded. Please try again.')
-      const file = new File([await response.blob()], `${sample.filename}.epub`, {
-        type: 'application/epub+zip',
-      })
-      const imported = await importBook(file, { storyOnly: true })
-      Object.assign(imported.book, {
-        title: sample.title,
-        author: sample.author,
-        genre: sample.genre,
-        description: sample.description,
-        cover: `/books/${sample.filename}.jpg`,
-        source: 'Project Gutenberg',
-        sourceUrl: `https://www.gutenberg.org/ebooks/${sample.number}`,
-      })
-      await saveBook(imported)
+    if (!data?.samples_imported) {
+      for (const sample of samples) {
+        const response = await fetch(`/books/${sample.filename}.epub`)
+        if (!response.ok) throw new Error('The sample books could not be loaded. Please try again.')
+        const file = new File([await response.blob()], `${sample.filename}.epub`, {
+          type: 'application/epub+zip',
+        })
+        const imported = await importBook(file, { storyOnly: true })
+        Object.assign(imported.book, {
+          title: sample.title,
+          author: sample.author,
+          genre: sample.genre,
+          description: sample.description,
+          cover: `/books/${sample.filename}.jpg`,
+          source: 'Project Gutenberg',
+          sourceUrl: `https://www.gutenberg.org/ebooks/${sample.number}`,
+        })
+        const { book } = await saveBook(imported)
+        const provenance = await supabase
+          .from('novel_sources')
+          .update({
+            rights_status: 'public_domain_us',
+            rights_note:
+              'Project Gutenberg lists this edition as public domain in the USA. Checked 2026-09-10.',
+            verified_at: new Date().toISOString(),
+            edition_label: 'Project Gutenberg EPUB',
+          })
+          .eq('book_id', book.id)
+        if (provenance.error) throw provenance.error
+      }
+      const result = await supabase
+        .from('library_settings')
+        .upsert({ owner_id: ownerId, samples_imported: true })
+      if (result.error) throw result.error
     }
-    const result = await supabase
-      .from('library_settings')
-      .upsert({ owner_id: ownerId, samples_imported: true })
-    if (result.error) throw result.error
+    await initializeTranslationSample()
   })().catch((error) => {
     initialization = undefined
     throw error

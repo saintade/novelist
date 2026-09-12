@@ -10,12 +10,14 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-extension
 *.local
 .env
 .env.*
 !.env.example
 test-results
 playwright-report
+.novelist/
 supabase/.temp/
 supabase/.branches/
 

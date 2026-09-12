@@ -20,8 +20,23 @@ const BookDetails = lazy(() =>
 const BookmarksView = lazy(() =>
   import('./pages/BookmarksPage').then((module) => ({ default: module.BookmarksView })),
 )
+const SourcesPage = lazy(() =>
+  import('./pages/SourcesPage').then((module) => ({ default: module.SourcesPage })),
+)
+const AdminPage = lazy(() => import('./pages/AdminPage').then(module => ({ default: module.AdminPage })))
 const ReaderRoute = lazy(() =>
   import('./pages/ReaderPage').then((module) => ({ default: module.ReaderRoute })),
+)
+const SourceReaderRoute = lazy(() =>
+  import('./pages/SourceReaderPage').then((module) => ({ default: module.SourceReaderRoute })),
+)
+const TranslationPage = lazy(() =>
+  import('./pages/TranslationPage').then((module) => ({ default: module.TranslationPage })),
+)
+const ExtensionConnectPage = lazy(() =>
+  import('./pages/ExtensionConnectPage').then((module) => ({
+    default: module.ExtensionConnectPage,
+  })),
 )
 
 function App() {
@@ -54,6 +69,34 @@ function App() {
       cancelled = true
     }
   }, [attempt])
+  useEffect(() => {
+    let cancelled = false
+    let refreshing = false
+    const refresh = () => {
+      if (
+        document.visibilityState !== 'visible' ||
+        /^\/read(?:-source)?\//.test(window.location.pathname) ||
+        refreshing
+      )
+        return
+      refreshing = true
+      void getBooks()
+        .then((saved) => {
+          if (!cancelled) setBooks(saved)
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          refreshing = false
+        })
+    }
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     writeSetting('novelist-theme', theme)
@@ -89,6 +132,9 @@ function App() {
           openImport: () => setImportOpen(true),
           patchBook,
           deleteBook,
+          rememberSourceReading: (id, position) => setBooks(current => current.map(book => book.id === id && position.observedAt >= book.lastReadAt ? {
+            ...book, sourceProgress: position.source, progress: { chapter: position.chapter, offset: position.fraction }, lastReadAt: position.observedAt, status: position.finished ? 'finished' : 'reading',
+          } : book)),
           notify,
         }}
       >
@@ -127,6 +173,27 @@ function App() {
             }
           >
             <Routes>
+              <Route path="/admin" element={<Shell><AdminPage /></Shell>} />
+              <Route
+                path="/read-source/:bookId/:sourceId/:chapter"
+                element={<SourceReaderRoute />}
+              />
+              <Route
+                path="/sources"
+                element={
+                  <Shell>
+                    <SourcesPage />
+                  </Shell>
+                }
+              />
+              <Route
+                path="/extension/connect"
+                element={
+                  <Shell>
+                    <ExtensionConnectPage />
+                  </Shell>
+                }
+              />
               <Route
                 path="/"
                 element={
@@ -152,6 +219,14 @@ function App() {
                 }
               />
               <Route path="/read/:bookId/:chapter" element={<ReaderRoute />} />
+              <Route
+                path="/books/:bookId/translation"
+                element={
+                  <Shell>
+                    <TranslationPage />
+                  </Shell>
+                }
+              />
               <Route
                 path="*"
                 element={

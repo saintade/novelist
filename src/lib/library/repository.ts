@@ -10,9 +10,18 @@ import type { Database } from '../supabase/database.types'
 
 type BookRow = Database['public']['Tables']['books']['Row']
 type ChapterRow = Database['public']['Tables']['chapters']['Row']
+export type LibraryFolder = Database['public']['Tables']['library_folders']['Row']
 const bucket = () => supabase.storage.from('library')
 const cachedBooks = new Map<string, LibraryBook>()
 const pendingUpdates = new Map<string, Promise<LibraryBook>>()
+let cachedOwner: string | undefined
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || (cachedOwner && session?.user.id !== cachedOwner)) {
+    cachedBooks.clear()
+    pendingUpdates.clear()
+  }
+  cachedOwner = session?.user.id
+})
 
 async function allChapters(bookId: string): Promise<ChapterRow[]> {
   const result: ChapterRow[] = []
@@ -38,18 +47,34 @@ async function hydrate(row: BookRow): Promise<LibraryBook> {
   if (progress.error) throw progress.error
   if (bookmarks.error) throw bookmarks.error
   let cover: string | undefined
-  if (row.cover_path) {
+  if (row.source_cover_url) {
+    try {
+      cover = (await import('../scraper/contracts')).publicPageUrl(row.source_cover_url)
+    } catch {
+      cover = undefined
+    }
+  }
+  if (!cover && row.cover_path) {
     const result = await bucket().createSignedUrl(row.cover_path, 86400)
     if (!result.error) cover = result.data.signedUrl
   }
+  const catalog =
+    row.format === 'WEB'
+      ? (await import('../extension/contracts')).catalogMetadataSchema.safeParse(
+          row.catalog_metadata,
+        )
+      : null
   const book: LibraryBook = {
     id: row.id,
     ownerId: row.owner_id,
+    novelId: row.novel_id,
+    folderId: row.folder_id ?? undefined,
     title: row.title,
     author: row.author,
     description: row.description,
     language: row.language,
     format: row.format as LibraryBook['format'],
+    catalog: catalog?.success ? catalog.data : undefined,
     genre: row.genre,
     cover,
     chapters: chapters.map((chapter) => ({
@@ -72,9 +97,59 @@ async function hydrate(row: BookRow): Promise<LibraryBook> {
     })),
     source: row.source,
     sourceUrl: row.source_url ?? undefined,
+    sourceProgress: progress.data?.source_id && progress.data.source_chapter_url ? {
+      sourceId: progress.data.source_id,
+      chapterUrl: progress.data.source_chapter_url,
+      language: progress.data.target_language ?? undefined,
+      versionId: progress.data.translation_version ?? undefined,
+    } : undefined,
+  }
+  if (book.sourceProgress && catalog?.success) {
+    const position = catalog.data.contents?.chapters.findIndex(chapter => chapter.url === book.sourceProgress!.chapterUrl) ?? -1
+    if (position >= 0) book.progress.chapter = position
   }
   cachedBooks.set(book.id, book)
   return book
+}
+
+export async function getLibraryFolders(): Promise<LibraryFolder[]> {
+  await ensureSession()
+  const folders: LibraryFolder[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const page = await supabase
+      .from('library_folders')
+      .select('*')
+      .order('name')
+      .order('id')
+      .range(offset, offset + 999)
+    if (page.error) throw page.error
+    folders.push(...page.data)
+    if (page.data.length < 1000) return folders
+  }
+}
+
+export async function saveLibraryFolder(name: string, id?: string): Promise<LibraryFolder> {
+  await ensureSession()
+  name = name.trim()
+  if (!name || name.length > 80) throw new Error('Use a folder name between 1 and 80 characters.')
+  const result = id
+    ? await supabase.from('library_folders').update({ name }).eq('id', id).select('*').single()
+    : await supabase.from('library_folders').insert({ name }).select('*').single()
+  if (result.error)
+    throw new Error(
+      result.error.code === '23505'
+        ? 'A folder with this name already exists.'
+        : result.error.message,
+    )
+  return result.data
+}
+
+export async function removeLibraryFolder(id: string): Promise<void> {
+  await ensureSession()
+  const result = await supabase.from('library_folders').delete().eq('id', id).select('id').single()
+  if (result.error) throw result.error
+  for (const [bookId, book] of cachedBooks)
+    if (book.folderId === id) cachedBooks.set(bookId, { ...book, folderId: undefined })
 }
 
 export async function getBooks(): Promise<LibraryBook[]> {
@@ -121,6 +196,7 @@ export async function saveBook(
       {
         id: imported.book.id,
         owner_id: ownerId,
+        novel_id: existing?.novel_id ?? imported.book.novelId ?? crypto.randomUUID(),
         title: imported.book.title,
         author: imported.book.author,
         description: imported.book.description,
@@ -231,7 +307,7 @@ export async function getOriginalFile(bookId: string): Promise<Blob | undefined>
     .eq('id', bookId)
     .maybeSingle()
   if (error) throw error
-  if (!data) return undefined
+  if (!data?.original_path) return undefined
   const result = await bucket().download(data.original_path)
   if (result.error) throw result.error
   return result.data
@@ -257,7 +333,8 @@ export async function updateBook(
         updated.title !== book.title ||
         updated.author !== book.author ||
         updated.description !== book.description ||
-        updated.genre !== book.genre
+        updated.genre !== book.genre ||
+        updated.folderId !== book.folderId
       ) {
         const { error } = await supabase
           .from('books')
@@ -266,6 +343,7 @@ export async function updateBook(
             author: updated.author,
             description: updated.description,
             genre: updated.genre,
+            ...(updated.folderId !== book.folderId ? { folder_id: updated.folderId ?? null } : {}),
           })
           .eq('id', bookId)
         if (error) throw error
@@ -325,6 +403,35 @@ export async function updateBook(
 export async function removeBook(bookId: string): Promise<void> {
   const ownerId = await ensureSession()
   await pendingUpdates.get(bookId)?.catch(() => undefined)
+  const { data: record, error: lookupError } = await supabase
+    .from('books')
+    .select('novel_id')
+    .eq('id', bookId)
+    .maybeSingle()
+  if (lookupError) throw lookupError
+  const sourcePaths: string[] = []
+  if (record) {
+    const sources = await supabase
+      .from('novel_sources')
+      .select('id')
+      .eq('novel_id', record.novel_id)
+    if (sources.error) throw sources.error
+    if (sources.data.length)
+      for (let offset = 0; ; offset += 1000) {
+        const chapters = await supabase
+          .from('source_chapters')
+          .select('content_path')
+          .in(
+            'source_id',
+            sources.data.map((source) => source.id),
+          )
+          .order('id')
+          .range(offset, offset + 999)
+        if (chapters.error) throw chapters.error
+        sourcePaths.push(...chapters.data.map((chapter) => chapter.content_path))
+        if (chapters.data.length < 1000) break
+      }
+  }
   const prefix = `${ownerId}/${bookId}`
   const paths: string[] = []
   for (const folder of [prefix, `${prefix}/chapters`]) {
@@ -346,4 +453,19 @@ export async function removeBook(bookId: string): Promise<void> {
   const { error } = await supabase.from('books').delete().eq('id', bookId)
   if (error) throw error
   cachedBooks.delete(bookId)
+  if (record) {
+    const remaining = await supabase
+      .from('books')
+      .select('id', { count: 'exact', head: true })
+      .eq('novel_id', record.novel_id)
+    if (remaining.error) throw remaining.error
+    if (remaining.count === 0) {
+      const removed = await supabase.from('novels').delete().eq('id', record.novel_id)
+      if (removed.error) throw removed.error
+      for (let offset = 0; offset < sourcePaths.length; offset += 100) {
+        const files = await bucket().remove(sourcePaths.slice(offset, offset + 100))
+        if (files.error) throw files.error
+      }
+    }
+  }
 }

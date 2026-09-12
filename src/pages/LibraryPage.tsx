@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Plus,
@@ -11,27 +11,72 @@ import {
   FolderOpen,
   ChevronLeft,
   ChevronRight,
+  FolderPlus,
+  Pencil,
+  Trash2,
 } from 'lucide-react'
 import { useLibrary } from '../app/library-context'
 import { readSetting, writeSetting } from '../lib/preferences'
 import { readingProgress } from '../lib/books'
 import { readLink } from '../lib/library/presentation'
-import { BookCover, IconButton, ProgressBar } from '../components/ui'
+import { BookCover, Dialog, IconButton, ProgressBar } from '../components/ui'
+import {
+  getLibraryFolders,
+  removeLibraryFolder,
+  saveLibraryFolder,
+  type LibraryFolder,
+} from '../lib/library/repository'
+import { bookSourceLabel } from '../lib/library/presentation'
 import { readingTime } from '../lib/format'
 import { BookTile } from '../components/library/BookTile'
 import { BookTable } from '../components/library/BookTable'
 
 export function LibraryView() {
-  const { books, openImport } = useLibrary()
+  const { books, openImport, notify } = useLibrary()
   const [params, setParams] = useSearchParams()
   const filter = params.get('shelf') || 'all'
+  const folderId = params.get('folder') || ''
+  const [folders, setFolders] = useState<LibraryFolder[]>([])
+  const [folderAction, setFolderAction] = useState<'create' | 'rename' | 'delete' | null>(null)
+  const [folderName, setFolderName] = useState('')
+  const [folderError, setFolderError] = useState('')
+  const [folderBusy, setFolderBusy] = useState(false)
+  const currentFolder = folders.find((folder) => folder.id === folderId)
+  const selectFolder = (id: string) =>
+    setParams((previous) => {
+      const next = new URLSearchParams(previous)
+      if (id) next.set('folder', id)
+      else next.delete('folder')
+      return next
+    })
+  useEffect(() => {
+    let cancelled = false
+    const refresh = () => {
+      void getLibraryFolders()
+        .then((saved) => {
+          if (!cancelled) setFolders(saved)
+        })
+        .catch((failure) => {
+          if (!cancelled)
+            setFolderError(
+              failure instanceof Error ? failure.message : 'Folders could not be loaded.',
+            )
+        })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const [sort, setSort] = useState('recent')
   const [view, setView] = useState<'grid' | 'list'>(() =>
     readSetting<string>('novelist-view', 'grid') === 'list' ? 'list' : 'grid',
   )
-  const paginationKey = `${filter}|${deferredQuery}|${sort}`
+  const paginationKey = `${folderId}|${filter}|${deferredQuery}|${sort}`
   const [pagination, setPagination] = useState({ key: paginationKey, page: 0 })
   const page = pagination.key === paginationKey ? pagination.page : 0
   const setPage = (nextPage: number) => setPagination({ key: paginationKey, page: nextPage })
@@ -39,11 +84,14 @@ export function LibraryView() {
     .filter((book) => book.status === 'reading')
     .sort((first, second) => second.lastReadAt - first.lastReadAt)[0]
   const featured = current ?? books.find((book) => book.title.includes('Alice')) ?? books[0]
-  const filtered = books
+  const folderBooks = books.filter(
+    (book) => !folderId || (folderId === 'unfiled' ? !book.folderId : book.folderId === folderId),
+  )
+  const filtered = folderBooks
     .filter(
       (book) =>
         (filter === 'all' || book.status === filter) &&
-        `${book.title} ${book.author} ${book.genre}`
+        `${book.title} ${book.author} ${book.genre} ${book.sourceUrl ?? ''} ${book.source}`
           .toLowerCase()
           .includes(deferredQuery.toLowerCase()),
     )
@@ -58,21 +106,21 @@ export function LibraryView() {
     )
   const visible = filtered.slice(page * 24, (page + 1) * 24)
   const tabs = [
-    { key: 'all', label: 'All books', count: books.length },
+    { key: 'all', label: 'All books', count: folderBooks.length },
     {
       key: 'reading',
       label: 'Reading',
-      count: books.filter((book) => book.status === 'reading').length,
+      count: folderBooks.filter((book) => book.status === 'reading').length,
     },
     {
       key: 'unread',
       label: 'To read',
-      count: books.filter((book) => book.status === 'unread').length,
+      count: folderBooks.filter((book) => book.status === 'unread').length,
     },
     {
       key: 'finished',
       label: 'Finished',
-      count: books.filter((book) => book.status === 'finished').length,
+      count: folderBooks.filter((book) => book.status === 'finished').length,
     },
   ]
   return (
@@ -85,7 +133,7 @@ export function LibraryView() {
           <Plus size={17} /> Import book
         </button>
       </div>
-      {featured && filter === 'all' && !query && (
+      {featured && !query && (
         <section className="reading-shelf" aria-labelledby="reading-shelf-title">
           <div className="section-heading">
             <h2 id="reading-shelf-title">
@@ -97,24 +145,31 @@ export function LibraryView() {
               <BookCover book={featured} />
             </Link>
             <div className="shelf-book">
-              <span className="genre-label">{featured.genre}</span>
               <Link to={`/books/${featured.id}`}>
                 <h3>{featured.title}</h3>
               </Link>
               <p>{featured.author}</p>
+              <p className="featured-source" title={featured.sourceUrl || featured.source}>
+                {bookSourceLabel(featured)}
+              </p>
               <div className="shelf-position">
-                {current
+                {featured.format === 'WEB'
+                  ? current ? `Chapter ${featured.progress.chapter + 1}${featured.sourceProgress?.language ? ` / ${featured.sourceProgress.language}` : ''}` : 'Web book'
+                  : current
                   ? `Chapter ${featured.progress.chapter + 1} of ${featured.chapters.length}`
                   : `${featured.chapters.length} chapters`}
-                <span className="meta-dot" />
-                {readingTime(featured.wordCount)} read
+                {featured.format !== 'WEB' && <><span className="meta-dot" />{readingTime(featured.wordCount)} read</>}
               </div>
-              <div className="shelf-progress">
+              {featured.format !== 'WEB' && <div className="shelf-progress">
                 <ProgressBar value={readingProgress(featured)} />
                 <span>{readingProgress(featured)}%</span>
-              </div>
+              </div>}
               <Link className="button primary" to={readLink(featured)}>
-                {current ? 'Continue reading' : 'Start reading'}
+                {featured.format === 'WEB' && !featured.sourceProgress
+                  ? 'View book'
+                  : current
+                    ? 'Continue reading'
+                    : 'Start reading'}
                 <ArrowRight size={17} />
               </Link>
             </div>
@@ -122,6 +177,64 @@ export function LibraryView() {
         </section>
       )}
       <section className="book-collection" aria-label="Book collection">
+        <div className="library-folders" aria-label="Library folders">
+          <label>
+            <FolderOpen size={17} />
+            <select
+              aria-label="Folder"
+              value={folderId}
+              onChange={(event) => selectFolder(event.target.value)}
+            >
+              <option value="">All folders ({books.length})</option>
+              <option value="unfiled">
+                Unfiled ({books.filter((book) => !book.folderId).length})
+              </option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.name} ({books.filter((book) => book.folderId === folder.id).length})
+                </option>
+              ))}
+            </select>
+          </label>
+          <IconButton
+            label="New folder"
+            onClick={() => {
+              setFolderError('')
+              setFolderName('')
+              setFolderAction('create')
+            }}
+          >
+            <FolderPlus size={17} />
+          </IconButton>
+          {currentFolder && (
+            <>
+              <IconButton
+                label="Rename folder"
+                onClick={() => {
+                  setFolderError('')
+                  setFolderName(currentFolder.name)
+                  setFolderAction('rename')
+                }}
+              >
+                <Pencil size={16} />
+              </IconButton>
+              <IconButton
+                label="Delete folder"
+                onClick={() => {
+                  setFolderError('')
+                  setFolderAction('delete')
+                }}
+              >
+                <Trash2 size={16} />
+              </IconButton>
+            </>
+          )}
+        </div>
+        {folderError && !folderAction && (
+          <p className="form-error" role="alert">
+            {folderError}
+          </p>
+        )}
         <div className="collection-top">
           <div className="filter-tabs" role="tablist" aria-label="Library filter">
             {tabs.map((tab) => (
@@ -130,7 +243,14 @@ export function LibraryView() {
                 role="tab"
                 aria-selected={filter === tab.key}
                 onClick={() =>
-                  startTransition(() => setParams(tab.key === 'all' ? {} : { shelf: tab.key }))
+                  startTransition(() =>
+                    setParams((previous) => {
+                      const next = new URLSearchParams(previous)
+                      if (tab.key === 'all') next.delete('shelf')
+                      else next.set('shelf', tab.key)
+                      return next
+                    }),
+                  )
                 }
               >
                 {tab.label}
@@ -208,7 +328,7 @@ export function LibraryView() {
             <FolderOpen size={32} strokeWidth={1.3} />
             <h2>{query ? 'No books found' : 'Nothing on this shelf yet'}</h2>
             {query && <p>No matches for &quot;{query}&quot;.</p>}
-            {(query || filter !== 'all') && (
+            {(query || filter !== 'all' || folderId) && (
               <button className="button" onClick={() => (query ? setQuery('') : setParams({}))}>
                 {query ? 'Clear search' : 'View all books'}
               </button>
@@ -242,6 +362,102 @@ export function LibraryView() {
           )}
         </div>
       </section>
+      {folderAction && (
+        <Dialog
+          title={
+            folderAction === 'create'
+              ? 'New folder'
+              : folderAction === 'rename'
+                ? 'Rename folder'
+                : 'Delete folder?'
+          }
+          onClose={() => {
+            if (!folderBusy) setFolderAction(null)
+          }}
+        >
+          <form
+            className="edit-form"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              setFolderBusy(true)
+              setFolderError('')
+              try {
+                if (folderAction === 'delete' && currentFolder) {
+                  await removeLibraryFolder(currentFolder.id)
+                  setFolders((previous) =>
+                    previous.filter((folder) => folder.id !== currentFolder.id),
+                  )
+                  selectFolder('')
+                  window.dispatchEvent(new Event('focus'))
+                  notify('Folder deleted. Books moved to Unfiled.')
+                } else {
+                  const saved = await saveLibraryFolder(
+                    folderName,
+                    folderAction === 'rename' ? currentFolder?.id : undefined,
+                  )
+                  setFolders((previous) =>
+                    [...previous.filter((folder) => folder.id !== saved.id), saved].sort(
+                      (first, second) => first.name.localeCompare(second.name),
+                    ),
+                  )
+                  selectFolder(saved.id)
+                }
+                setFolderAction(null)
+              } catch (failure) {
+                setFolderError(
+                  failure instanceof Error ? failure.message : 'Folder could not be saved.',
+                )
+              } finally {
+                setFolderBusy(false)
+              }
+            }}
+          >
+            {folderAction === 'delete' ? (
+              <p>
+                Delete &quot;{currentFolder?.name}&quot;? Its books will move to Unfiled. No books,
+                downloads, or translations will be deleted.
+              </p>
+            ) : (
+              <label>
+                Folder name
+                <input
+                  autoFocus
+                  required
+                  maxLength={80}
+                  value={folderName}
+                  onChange={(event) => setFolderName(event.target.value)}
+                  disabled={folderBusy}
+                />
+              </label>
+            )}
+            {folderError && (
+              <p className="form-error" role="alert">
+                {folderError}
+              </p>
+            )}
+            <div className="dialog-actions">
+              <button
+                className="button"
+                type="button"
+                disabled={folderBusy}
+                onClick={() => setFolderAction(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className={`button ${folderAction === 'delete' ? 'danger-button' : 'primary'}`}
+                disabled={folderBusy || (folderAction !== 'delete' && !folderName.trim())}
+              >
+                {folderAction === 'delete'
+                  ? 'Delete folder'
+                  : folderAction === 'rename'
+                    ? 'Rename folder'
+                    : 'Create folder'}
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      )}
     </main>
   )
 }

@@ -1,0 +1,174 @@
+NOVELIST: PRIVATE PHONE ACCESS ON FREE HOSTING
+
+Status
+The application and deployment template are prepared. The hosted schema, account,
+library data and Storage files have NOT been migrated yet. Supabase CLI and GitHub
+CLI require sign-in. Do not point the Mac app at the hosted project before the
+restore and verification are complete.
+
+Rotate the Supabase secret key that was pasted in chat. Enter replacement secrets
+only in your terminal or hosting dashboards, never in this file or in Git.
+The application server needs only the Supabase publishable key, not a secret key.
+
+1. AUTHORIZE THE CLIS
+   Run directly in your terminal:
+     npx supabase login
+     gh auth login
+   A project publishable/secret API key is not a Supabase CLI access token and is
+   not the database password. The CLI needs your account login; database restore
+   also needs a direct/session-pooler connection or the database password.
+   The intended GitHub repository is a new PRIVATE repository named novelist.
+
+2. MIGRATE THE EXISTING LIBRARY FIRST
+   Target project: klkjphqfzzbcecksdwtw
+   Supabase URL: https://klkjphqfzzbcecksdwtw.supabase.co
+   Existing library owner UUID: 28fd9dab-36c4-46b4-a96a-53583f44ff50
+   Preserve that UUID, book/source IDs, originals, translations, guides, glossary,
+   folders and reading positions. The shared VS Code browser has a different test
+   account; do not migrate that account instead.
+
+   Link the real library owner to the agreed email and verify it, then set a
+   password. Local conversion needs manual identity linking and email delivery.
+   Rehearse schema/Auth compatibility and restoration before the final cutover.
+   Use a private backup, preserve migration history and copy Storage bytes
+   separately. SQL backups alone do not contain the chapter file bytes.
+   Do not reset Supabase, delete local volumes or blindly replay data migrations.
+   Do not copy development/test accounts to the private hosted library.
+
+   Read-only verification commands:
+     npm run migration:manifest -- --help
+     npm run migration:manifest -- --output .novelist/source-manifest.json
+     npm run migration:manifest -- --output .novelist/target-manifest.json
+     npm run migration:manifest -- --compare .novelist/source-manifest.json .novelist/target-manifest.json
+   Use the respective source/target environments for the two captures. See
+   docs/deployment.md for the manifest credentials and migration checklist.
+   Pause writes only during the agreed final snapshot/copy window.
+
+3. LOCK DOWN THE HOSTED PROJECT
+   Provision/restore the permanent account with the preserved UUID above.
+   Disable public sign-ups and anonymous sign-ins on the HOSTED project.
+   Keep the library bucket PRIVATE. Retain all owner RLS policies.
+   In the hosted SQL editor, after restoring and verifying the account:
+     select public.configure_private_library('28fd9dab-36c4-46b4-a96a-53583f44ff50'::uuid);
+     select public.library_access_status();
+   restricted must be true. allowed can be false for an administrator without a
+   user JWT. Do not activate this restriction on the local development database.
+   Test a second authenticated account, anonymous access, direct RPCs and Storage.
+
+   Configure Auth Site URL to the final Render HTTPS URL. Add the exact localhost
+   app URL as an allowed redirect for Mac ingestion. Enable email delivery and
+   include {{ .Token }} in the Magic Link and Change Email email templates if
+   using the app's email-code sign-in/recovery flow. Test recovery before cutover.
+
+4. CREATE A FREE RENDER WEB SERVICE
+   Connect the private novelist GitHub repository. Choose Web Service, Node,
+   Free instance, one instance, and a region near the Supabase project.
+   Build command: npm ci --include=dev && npm run build
+   Start command: npm start
+   Health check: /health
+   Auto-deploy: off until migration and checks are complete.
+   render.yaml contains the equivalent Blueprint. No paid resources are required
+   by that template. Review Render's current quotas before creating the service.
+
+   Environment variables (these are names/settings, not secret values):
+     NODE_VERSION=24.13.0
+     NODE_ENV=production
+     VITE_AUTH_MODE=private
+     VITE_SUPABASE_URL=https://klkjphqfzzbcecksdwtw.supabase.co
+     VITE_SUPABASE_PUBLISHABLE_KEY=<project publishable key from Supabase>
+     NOVELIST_ALLOWED_USER_ID=28fd9dab-36c4-46b4-a96a-53583f44ff50
+     NOVELIST_PUBLIC_ORIGIN=https://<your-service>.onrender.com
+     NOVELIST_ENABLE_LIVE_AI=false
+     NOVELIST_AI_CONCURRENCY=2
+     NOVELIST_AI_REQUESTS_PER_HOUR=0
+     OPENAI_TRANSLATION_MODEL=gpt-5.6-luna
+     OPENAI_CHAT_MODEL=gpt-4.1-mini
+     OPENAI_API_KEY=<enter directly in Render only when enabling translations>
+
+   Render supplies PORT. Rebuild after changing VITE_ variables. Never set a
+   Supabase secret/service-role key as VITE_SUPABASE_PUBLISHABLE_KEY. The server
+   refuses startup until the hosted database owner restriction is activated.
+   Turn live AI on only after access and data checks pass; OpenAI usage is paid
+   separately even when Render and Supabase are free.
+
+5. CONNECT PHONE AND MAC TO THE SAME LIBRARY
+   Sign in at the Render URL from your phone. Test original and translated
+   reading, exact chapter/version/scroll resume and account recovery.
+   After verified cutover, use the hosted Supabase URL/publishable key, private
+   Auth mode and the same owner UUID in the Mac app. Keep its extension bridge
+   on localhost. The extension still downloads through the Mac into the same
+   hosted library. Scraping does not run on Render. Keep local backups intact.
+
+FREE-TIER LIMITS (CHECKED 2026-09-11)
+Supabase Free: 500 MB database, 1 GB files, 5 GB egress plus 5 GB cached egress;
+projects can pause after one week of inactivity. Automatic backups are not
+included. Render Free sleeps after 15 idle minutes and can take about a minute
+to wake. It can restart at any time and has a shared 750 instance-hour monthly
+allowance. Excess outbound/API traffic can suspend a free instance.
+
+Free Render is suitable for this personal reader but does not guarantee long
+unattended translation queues will finish while every browser is closed. Saved
+results persist in Supabase; interrupted jobs recover on authenticated reconnect
+within their attempt limit, while manually paused jobs stay paused. There is
+no artificial keep-alive. GitHub Pages can host static UI, not this Node API.
+Vercel would require adapting the worker to serverless/background infrastructure;
+Render is the compatible free option for the existing server.
+
+LIBRARY SIZE AND COMPRESSION
+Read-only sample: 3 books, 682 downloaded chapters, 57 translation versions,
+about 4.9 MB of chapter files and 6.9 MB of logical owner row payloads. Counts
+grow as you read/download/translate. Database indexes and saved context add to
+capacity; the 1 GB file allowance is not the only limit on book count.
+
+PostgreSQL already compresses large text/JSON with TOAST/pglz. On local copies
+of 61 translation rows, pglz used 2.61 MB versus LZ4's 2.83 MB, so pglz was kept.
+No extra database compression extension was needed. New downloaded chapters
+use gzip only when it saves at least 10%; a 30-chapter real-data sample saved
+57%. Existing files are not rewritten. Readers support both forms, bound
+decompression, and verify the same original-text SHA-256 hash after decoding.
+
+TRANSLATION BEHAVIOR
+Regular Translate/Retranslate submits a durable one-chapter job and returns
+quickly. It can finish while you read elsewhere. Completion never redirects
+another book; return to the requested chapter to load it. Transient failures retry
+automatically, with three total attempts per unfinished chapter and backoff.
+Quota/access/source errors or exhausted attempts stop; remaining reader recovery
+controls affect only that reader job, not a bulk queue. Manual Pause/Cancel wins.
+
+Bulk Translate supports adaptive groups of up to 10, or 1 for per-chapter
+continuity. Translate untranslated reviews the whole indexed book (up to 20,000
+chapters); manual ranges remain limited to 1,000. Download originals first.
+Regular and grouped jobs may run on different chapters together.
+Overlapping running chapters share work; completed matching versions are skipped.
+Each result has a source ID/hash and ordered paragraph coverage. Fully closed,
+validated chapters can be saved from token-truncated group output. Incomplete
+chapters are not published. Only unfinished chapters retry, in smaller groups
+after truncated output. Starting the job authorizes these bounded paid retries.
+This uses the regular Responses API, NOT the discounted OpenAI Batch API.
+
+Groups share pre-group recent context and guide instructions. New translations
+and opt-in guide updates affect the next request; a 10-chapter group can pass
+the default 5-chapter guide interval. Group output is capped by model and total
+budget; Luna's application ceiling is 65,536 output tokens. Unknown models
+default conservatively to 16,384. Group timing/usage averages are allocations,
+not individually measured per-chapter latency or exact billing attribution.
+
+Settings > Admin & usage shows monthly recorded cost estimates, unknown charges,
+quota failures, open jobs and recent provider requests. One grouped request is
+counted once, and retries have separate entries. New translation, guide, metadata
+and term-suggestion requests are tracked; older history and other untracked tools
+are not exact billing totals. The optional monthly alert is NOT a hard spending
+cap. Remaining OpenAI credit is unavailable here; use the Usage/Billing links
+for authoritative charges and provider limits.
+
+For lower latency, compare gpt-4.1-mini and gpt-4.1-nano against Luna on a few
+authorized chapters. Smaller non-reasoning models are useful speed candidates,
+not a guarantee of equivalent translation quality. Luna already uses reasoning
+effort none here. Ten chapters per request can improve throughput/input reuse,
+but usually makes the first completed group take longer. No live paid speed
+benchmark was run by the assistant.
+
+References:
+https://supabase.com/pricing
+https://render.com/docs/free
+https://developers.openai.com/api/docs/guides/latency-optimization

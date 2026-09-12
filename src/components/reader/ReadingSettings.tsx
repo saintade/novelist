@@ -1,4 +1,5 @@
 import { Minus, Moon, Plus, Sun } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Dialog, IconButton } from '../ui'
 import { defaults, type ReaderSettings } from '../../lib/reader/settings'
 import '../../styles/reader.css'
@@ -9,9 +10,17 @@ interface Props {
   theme: 'light' | 'dark'
   onTheme: (theme: 'light' | 'dark') => void
   onClose: () => void
+  chapterControls?: ReactNode
 }
 
-export function ReadingSettings({ settings, setSettings, theme, onTheme, onClose }: Props) {
+export function ReadingSettings({
+  settings,
+  setSettings,
+  theme,
+  onTheme,
+  onClose,
+  chapterControls,
+}: Props) {
   const font =
     settings.font === 'literata'
       ? 'Literata, Georgia, serif'
@@ -39,6 +48,12 @@ export function ReadingSettings({ settings, setSettings, theme, onTheme, onClose
           </button>
         </div>
       </div>
+      {chapterControls && (
+        <section className="reader-chapter-settings" aria-label="Chapter settings">
+          <h3>Chapter</h3>
+          {chapterControls}
+        </section>
+      )}
       <div className="setting-group">
         <label>Typeface</label>
         <div className="font-options">

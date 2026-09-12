@@ -14,3 +14,12 @@ The matching JPGs are the covers supplied by those Project Gutenberg editions. S
 are short descriptions written for this prototype, not model-generated translations. Import
 tests read the actual EPUBs. The sample library indexes story chapters while retaining each full
 original file for download.
+
+## Synthetic Translation Fixture
+
+`qinglan-crossing.zh.txt` and `qinglan-crossing.en.txt` are paired, original synthetic fixtures
+created by the coding assistant during development on 2026-09-10. They were not downloaded from
+a published novel. The English text is not an independently verified human translation and must
+not be used to claim model-quality results. The three chapters test recurring entities, a nickname,
+terminology, numbers, negation and continuity. Runtime fixture extraction is deterministic and
+makes no model API request.

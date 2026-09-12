@@ -1,16 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { Ellipsis, BookOpen, BookCheck, Download, Trash2, LoaderCircle } from 'lucide-react'
+import {
+  Ellipsis,
+  BookOpen,
+  BookCheck,
+  Download,
+  Trash2,
+  LoaderCircle,
+  FolderInput,
+  Pencil,
+} from 'lucide-react'
 import { useLibrary } from '../../app/library-context'
 import type { LibraryBook } from '../../lib/books'
 import { readLink, downloadBook } from '../../lib/library/presentation'
 import { Dialog, IconButton } from '../ui'
+import { getLibraryFolders, type LibraryFolder } from '../../lib/library/repository'
+import { EditBookDialog } from './EditBookDialog'
 
 export function BookMenu({ book }: { book: LibraryBook }) {
   const { patchBook, deleteBook, notify } = useLibrary()
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [folderDialog, setFolderDialog] = useState(false)
+  const [folders, setFolders] = useState<LibraryFolder[]>([])
+  const [folderId, setFolderId] = useState(book.folderId ?? '')
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [folderError, setFolderError] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const location = useLocation()
@@ -41,8 +58,9 @@ export function BookMenu({ book }: { book: LibraryBook }) {
       {open && (
         <div className="dropdown-menu">
           <Link to={readLink(book)} onClick={() => setOpen(false)}>
-            <BookOpen size={16} /> Read book
+            <BookOpen size={16} /> {book.format === 'WEB' ? 'View book' : 'Read book'}
           </Link>
+          <button onClick={() => { setOpen(false); setEditing(true) }}><Pencil size={16} />Edit book details</button>
           <button
             onClick={() => {
               void patchBook(book.id, (current) => ({
@@ -56,13 +74,35 @@ export function BookMenu({ book }: { book: LibraryBook }) {
             <BookCheck size={16} />
             {book.status === 'finished' ? 'Mark as unread' : 'Mark as finished'}
           </button>
+          {book.format !== 'WEB' && (
+            <button
+              onClick={() => {
+                void downloadBook(book, notify)
+                setOpen(false)
+              }}
+            >
+              <Download size={16} /> Download original
+            </button>
+          )}
           <button
             onClick={() => {
-              void downloadBook(book, notify)
               setOpen(false)
+              setFolderDialog(true)
+              setFolderBusy(true)
+              setFolderError('')
+              setFolderId(book.folderId ?? '')
+              void getLibraryFolders()
+                .then(setFolders)
+                .catch((failure) =>
+                  setFolderError(
+                    failure instanceof Error ? failure.message : 'Folders could not be loaded.',
+                  ),
+                )
+                .finally(() => setFolderBusy(false))
             }}
           >
-            <Download size={16} /> Download original
+            <FolderInput size={16} />
+            Move to folder
           </button>
           <button
             className="danger"
@@ -75,6 +115,76 @@ export function BookMenu({ book }: { book: LibraryBook }) {
           </button>
         </div>
       )}
+      {folderDialog && (
+        <Dialog
+          title="Move to folder"
+          onClose={() => {
+            if (!folderBusy) setFolderDialog(false)
+          }}
+        >
+          <form
+            className="edit-form folder-form"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              setFolderBusy(true)
+              try {
+                if (
+                  await patchBook(book.id, (current) => ({
+                    ...current,
+                    folderId: folderId || undefined,
+                  }))
+                ) {
+                  setFolderDialog(false)
+                  notify(folderId ? 'Book moved to folder.' : 'Book moved to Unfiled.')
+                } else setFolderError('The book could not be moved. Refresh and retry.')
+              } finally {
+                setFolderBusy(false)
+              }
+            }}
+          >
+            <p>{book.title}</p>
+            <label>
+              Folder
+              <select
+                aria-label="Destination folder"
+                value={folderId}
+                disabled={folderBusy}
+                onChange={(event) => setFolderId(event.target.value)}
+              >
+                <option value="">Unfiled</option>
+                {folders.map((folder) => (
+                  <option key={folder.id} value={folder.id}>
+                    {folder.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {folderError && (
+              <p className="form-error" role="alert">
+                {folderError}
+              </p>
+            )}
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={folderBusy}
+                onClick={() => setFolderDialog(false)}
+              >
+                Cancel
+              </button>
+              <button className="button primary" disabled={folderBusy}>
+                Move book
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      )}
+      {editing && <EditBookDialog book={book} onClose={() => setEditing(false)} onSave={async changes => {
+        const saved = await patchBook(book.id, current => ({ ...current, ...changes }))
+        if (saved) { setEditing(false); notify('Book details updated.') }
+        return saved
+      }} />}
       {confirmDelete && (
         <Dialog
           title="Remove book?"

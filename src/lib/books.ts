@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import type Section from 'epubjs/types/section'
 import type { NavItem } from 'epubjs/types/navigation'
+import type { CatalogMetadata } from './extension/contracts'
 
 export interface ChapterInfo {
   id: string
@@ -23,11 +24,14 @@ export interface Bookmark {
 export interface LibraryBook {
   id: string
   ownerId?: string
+  novelId?: string
+  folderId?: string
   title: string
   author: string
   description: string
   language: string
-  format: 'EPUB' | 'TXT'
+  format: 'EPUB' | 'TXT' | 'WEB'
+  catalog?: CatalogMetadata
   cover?: string
   genre: string
   chapters: ChapterInfo[]
@@ -40,6 +44,7 @@ export interface LibraryBook {
   bookmarks: Bookmark[]
   source: string
   sourceUrl?: string
+  sourceProgress?: { sourceId: string; chapterUrl: string; language?: string; versionId?: string }
 }
 
 export interface ImportedBook {

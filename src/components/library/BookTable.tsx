@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { readingProgress, type LibraryBook } from '../../lib/books'
-import { statusLabel } from '../../lib/library/presentation'
+import { bookSourceLabel, statusLabel } from '../../lib/library/presentation'
 import { BookCover, ProgressBar } from '../ui'
 import { BookMenu } from './BookMenu'
 
@@ -28,12 +28,17 @@ export function BookTable({ books }: { books: LibraryBook[] }) {
                   <span>
                     <strong>{book.title}</strong>
                     <small>{book.author}</small>
+                    <small title={book.sourceUrl || book.source}>{bookSourceLabel(book)}</small>
                   </span>
                 </Link>
               </td>
               <td>
-                {book.chapters.length}
-                <span className="table-secondary">Available locally</span>
+                {book.format === 'WEB'
+                  ? (book.catalog?.contents?.foundCount ?? 0)
+                  : book.chapters.length}
+                <span className="table-secondary">
+                  {book.format === 'WEB' ? 'Indexed chapters' : 'Available locally'}
+                </span>
               </td>
               <td>
                 <span className={`status-label status-${book.status}`}>
