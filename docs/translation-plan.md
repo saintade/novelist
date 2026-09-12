@@ -14,8 +14,10 @@ Application and extension builds, lint, database lint and patch whitespace check
 The noun editor and reader screenshots were inspected on mobile. Model responses in tests were
 mocked; read-only audits of saved user translations made no paid calls. Adaptive regular-API groups,
 independent background reader jobs, bounded automatic retries, private hosting code, gzip files
-and usage administration are implemented. Hosted deployment/migration still needs CLI authorization;
-the discounted provider Batch API is not implemented or live-provider evaluated.
+and usage administration are implemented. Supabase CLI is now linked,54 schema migrations are deployed,
+and the preserved hosted owner awaits email verification. Library-data/file migration, private GitHub
+push and Render deployment remain pending. The discounted provider Batch API is not implemented or
+live-provider evaluated. Built-in email-link login supports the Free project's default email provider.
 
 | Requested                            | Implemented                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -54,7 +56,7 @@ the discounted provider Batch API is not implemented or live-provider evaluated.
 | Cost/privacy safeguards              | Owner RLS and private storage; confirmed paid actions, separate opt-in automatic guide work, token estimates and actual usage, no SDK retry, cached sandbox extraction and manual challenge handling.                                                                                                                                                                                                     |
 | Persistent jobs                      | Occupied AI slots wait without consuming attempts. Development reloads retain worker state. Auth refresh in any open view renews workers; interrupted authorized jobs recover on reconnect within attempt limits. Reader completion never redirects another book. Manual pauses stay paused; free-host shutdown/token expiry can still delay work. |
 | Admin and storage                    | Settings > Admin & usage: request-level estimates, unknown charges, quota errors, monthly alert threshold and jobs. Alert is not a hard spending cap or provider balance. New chapter files gzip when at least10% smaller; bounded decoding retains original hashes. Existing PostgreSQL TOAST/pglz kept after size comparison. |
-| Private hosting preparation          | Standalone Node API/static server, private password/email-code sign-in, same-owner account linking, restrictive RLS/Storage, Free Render template and read-only manifest. No hosted schema/data restore or push without CLI authorization; see note.txt and deployment.md. |
+| Private hosting preparation          | Standalone Node API/static server, password/email-link/code sign-in, preserved owner UUID, restrictive RLS/Storage, Free Render template and private backup/manifest. Hosted schema deployed; owner verification, library-data transfer and GitHub/Render publication still pending. See note.txt and deployment.md. |
 
 ### Limits and Research
 

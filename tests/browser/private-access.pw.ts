@@ -84,7 +84,7 @@ test.afterAll(async () => {
   if (assets) await rm(assets, { recursive: true, force: true })
 })
 
-test('private production sign-in isolates accounts and supports password and email-code recovery', async ({
+test('private production sign-in isolates accounts and supports password and email-link recovery', async ({
   page,
 }, testInfo) => {
   let allowed = false
@@ -125,6 +125,7 @@ test('private production sign-in isolates accounts and supports password and ema
     user,
   }
   const otpRequests: unknown[] = []
+  const otpRedirects: (string | null)[] = []
   const passwordUpdates: unknown[] = []
   await page.route('https://private-library.supabase.test/**', async (route) => {
     const request = route.request()
@@ -140,6 +141,7 @@ test('private production sign-in isolates accounts and supports password and ema
     } else if (path === '/auth/v1/logout') body = {}
     else if (path === '/auth/v1/otp') {
       otpRequests.push(request.postDataJSON())
+      otpRedirects.push(new URL(request.url()).searchParams.get('redirect_to'))
       body = {}
     } else if (path === '/rest/v1/rpc/library_access_status') body = { restricted: true, allowed }
     else if (path.startsWith('/rest/v1/')) {
@@ -190,9 +192,20 @@ test('private production sign-in isolates accounts and supports password and ema
   await account.getByRole('button', { name: 'Sign out', exact: true }).click()
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
   await page.getByLabel('Email', { exact: true }).fill(user.email)
-  await page.getByRole('button', { name: 'Email a sign-in code', exact: true }).click()
+  await page.getByRole('button', { name: 'Email sign-in link', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('Sign-in email sent.')
+  expect(otpRedirects).toEqual([origin])
+  await page.goto(`${origin}/?code=fixture-email-link-code`)
+  await expect(page.locator('.app-shell')).toBeVisible()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Library account', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Library account', exact: true }).getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await page.getByLabel('Email', { exact: true }).fill(user.email)
+  await page.getByRole('button', { name: 'Email sign-in link', exact: true }).click()
+  await page.getByRole('button', { name: 'Enter email code', exact: true }).click()
   await page.getByLabel('Email code', { exact: true }).fill('123456')
-  expect(otpRequests).toEqual([expect.objectContaining({ email: user.email, create_user: false })])
+  expect(otpRequests).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ email: user.email, create_user: false })))
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.locator('.app-shell')).toBeVisible()
   expect(anonymousRequests).toBe(0)

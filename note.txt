@@ -1,22 +1,38 @@
 NOVELIST: PRIVATE PHONE ACCESS ON FREE HOSTING
 
 Status
-The application and deployment template are prepared. The hosted schema, account,
-library data and Storage files have NOT been migrated yet. Supabase CLI and GitHub
-CLI require sign-in. Do not point the Mac app at the hosted project before the
-restore and verification are complete.
+Supabase CLI is signed in and linked. All 54 application migrations through
+202609110042 are deployed to the hosted project in us-east-1 (PostgreSQL 17).
+The private bucket and table RLS were verified. A permanent hosted account was
+provisioned with the existing owner UUID and chosen email; email verification is
+still pending. No password was assigned or email verification bypassed.
+
+Library records and Storage files have NOT been copied to the hosted project.
+The normal Mac app at http://127.0.0.1:5173 still uses the local library. GitHub
+sign-in/push and Render deployment are still pending.
+
+Account verification preview: http://127.0.0.1:5174 on the Mac, with AI disabled.
+Enter the chosen email, use Email sign-in link, and follow the emailed link in
+the same browser. The private library remains gated until its owner restriction
+is activated after verification. Never enter verification codes in chat.
+
+A private rehearsal backup is under
+.novelist/backups/hosted-rehearsal-2026-09-12T03-46-24.764Z/
+It contains a PostgreSQL archive, 30 owner-table fingerprints and 874 verified
+files (5,531,192 bytes). It is a rehearsal snapshot, not a final cutover snapshot.
+The archive is a local recovery backup, not a dump to restore blindly to cloud.
 
 Rotate the Supabase secret key that was pasted in chat. Enter replacement secrets
 only in your terminal or hosting dashboards, never in this file or in Git.
 The application server needs only the Supabase publishable key, not a secret key.
 
 1. AUTHORIZE THE CLIS
-   Run directly in your terminal:
-     npx supabase login
+   Supabase login is complete. GitHub still needs authorization in your terminal:
      gh auth login
    A project publishable/secret API key is not a Supabase CLI access token and is
-   not the database password. The CLI needs your account login; database restore
-   also needs a direct/session-pooler connection or the database password.
+   not the database password. This CLI supports Management API SQL with
+   --linked --project-ref, so schema deployment did not require sharing a database
+   password. A direct restore connection, if needed, must be configured privately.
    The intended GitHub repository is a new PRIVATE repository named novelist.
 
 2. MIGRATE THE EXISTING LIBRARY FIRST
@@ -27,13 +43,18 @@ The application server needs only the Supabase publishable key, not a secret key
    folders and reading positions. The shared VS Code browser has a different test
    account; do not migrate that account instead.
 
-   Link the real library owner to the agreed email and verify it, then set a
-   password. Local conversion needs manual identity linking and email delivery.
+   Verify the provisioned hosted owner using the account preview. Its UUID is
+   identical to the source owner; the local anonymous account is unchanged.
+   Once the hosted library is activated, set a password in Library account.
    Rehearse schema/Auth compatibility and restoration before the final cutover.
    Use a private backup, preserve migration history and copy Storage bytes
    separately. SQL backups alone do not contain the chapter file bytes.
    Do not reset Supabase, delete local volumes or blindly replay data migrations.
    Do not copy development/test accounts to the private hosted library.
+   The source and hosted Auth identity metadata will differ intentionally because
+   an anonymous local identity is becoming a permanent hosted email identity.
+   Verify the preserved UUID and confirmed email separately; do not ignore any
+   unexpected application-row, migration-history or Storage-file differences.
 
    Read-only verification commands:
      npm run migration:manifest -- --help
@@ -45,8 +66,8 @@ The application server needs only the Supabase publishable key, not a secret key
    Pause writes only during the agreed final snapshot/copy window.
 
 3. LOCK DOWN THE HOSTED PROJECT
-   Provision/restore the permanent account with the preserved UUID above.
-   Disable public sign-ups and anonymous sign-ins on the HOSTED project.
+   The permanent account is provisioned but still needs email verification.
+   Public sign-ups and anonymous sign-ins are disabled on the HOSTED project.
    Keep the library bucket PRIVATE. Retain all owner RLS policies.
    In the hosted SQL editor, after restoring and verifying the account:
      select public.configure_private_library('28fd9dab-36c4-46b4-a96a-53583f44ff50'::uuid);
@@ -55,10 +76,17 @@ The application server needs only the Supabase publishable key, not a secret key
    user JWT. Do not activate this restriction on the local development database.
    Test a second authenticated account, anonymous access, direct RPCs and Storage.
 
-   Configure Auth Site URL to the final Render HTTPS URL. Add the exact localhost
-   app URL as an allowed redirect for Mac ingestion. Enable email delivery and
-   include {{ .Token }} in the Magic Link and Change Email email templates if
-   using the app's email-code sign-in/recovery flow. Test recovery before cutover.
+   Auth currently permits http://127.0.0.1:5174 for enrollment. Change Site URL to
+   the final Render HTTPS URL and retain the exact Mac ingestion URL as an allowed
+   redirect before cutover. The app uses built-in email sign-in links by default.
+   Supabase rejected custom email-template changes on this Free project with the
+   default provider; custom code-only templates need custom SMTP or a paid plan.
+   Do not add either merely for login. Code entry remains an optional fallback
+   when the provider includes a code. Actual email delivery still needs testing.
+
+   Hosted-only Auth changes were applied from the ignored minimal configuration
+   at .novelist/hosted-auth/supabase/config.toml. Do not push the local development
+   supabase/config.toml to production. Always review config diff before pushing.
 
 4. CREATE A FREE RENDER WEB SERVICE
    Connect the private novelist GitHub repository. Choose Web Service, Node,

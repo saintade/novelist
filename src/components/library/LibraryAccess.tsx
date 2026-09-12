@@ -18,6 +18,7 @@ export function LibraryAccess({
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [emailCode, setEmailCode] = useState(false)
+  const [emailSent, setEmailSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -50,6 +51,8 @@ export function LibraryAccess({
       if (event === 'SIGNED_OUT' || event === 'SIGNED_IN') {
         setPassword('')
         setCode('')
+        setEmailCode(false)
+        setEmailSent(false)
       }
     })
     return () => {
@@ -191,16 +194,24 @@ export function LibraryAccess({
                 }
                 const result = await supabase.auth.signInWithOtp({
                   email: email.trim(),
-                  options: { shouldCreateUser: false },
+                  options: { shouldCreateUser: false, emailRedirectTo: window.location.origin },
                 })
-                if (!result.error) setEmailCode(true)
+                if (!result.error) setEmailSent(true)
                 return result
               })
             }
           >
             <Mail size={16} />
-            {emailCode ? 'Use password' : 'Email a sign-in code'}
+            {emailCode ? 'Use password' : 'Email sign-in link'}
           </button>
+          {emailSent && !emailCode && (
+            <>
+              <p role="status">Sign-in email sent.</p>
+              <button type="button" className="button subtle" disabled={busy} onClick={() => setEmailCode(true)}>
+                <KeyRound size={16} />Enter email code
+              </button>
+            </>
+          )}
         </form>
       )}
       {error && (

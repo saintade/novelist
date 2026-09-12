@@ -1,9 +1,16 @@
 # Private Hosted Novelist
 
-Status: production server, private sign-in, owner restrictions and verification tooling implemented
-and locally tested; hosted migration/deployment pending CLI authorization. The supplied project is
-`klkjphqfzzbcecksdwtw`. No cloud schema/data has been changed by this work. See
-[note.txt](../note.txt) for exact free-Render settings and the remaining account/migration steps.
+Status: Supabase CLI is authenticated and linked to `klkjphqfzzbcecksdwtw`. All54 application
+migrations through202609110042 are deployed to the initially empty hosted PostgreSQL17 project in
+us-east-1. Table RLS and the private bucket were verified after deployment. A permanent hosted owner
+was provisioned with the preserved UUID and chosen email, without a password or verified-email flag.
+Email verification, application-data/file transfer, GitHub push and Render deployment remain pending.
+See [note.txt](../note.txt) for exact settings and current enrollment instructions.
+
+A private local rehearsal backup contains a readable PostgreSQL archive,30 owner-table fingerprints
+and874 SHA-256-verified files. It is not the final consistent cutover snapshot. Local Auth and the
+running library on port5173 were not switched, stopped or reset. Port5174 is a separate hosted-account
+verification preview with AI disabled; the library remains gated until owner activation.
 
 ## Recommended Architecture
 
@@ -27,13 +34,14 @@ server maintenance that is unnecessary for a reader-first phone deployment.
    routes are not served. The API checks the exact configured HTTPS Host and Origin.
 - Hosted operations validate a permanent Supabase user and `NOVELIST_ALLOWED_USER_ID`, then use
    that user's JWT with RLS. The app server needs no Supabase secret/service-role key.
-- Private sign-in supports password and email OTP for existing accounts, not public registration.
+- Private sign-in supports passwords, built-in email links and optional email OTP for existing accounts, not public registration.
    An activated database owner restriction is required before the library mounts. Refresh retains
    the reader; sign-out/account changes clear access. Hosted mode never silently seeds a new library.
 - Localhost with local Supabase keeps anonymous development. Remote Supabase or a non-localhost app
    requires private sign-in. Use `VITE_AUTH_MODE=private` explicitly in hosted and Mac ingestion builds.
-- Settings > Library account links the existing owner to email, verifies it and sets a password
-   without intentionally changing its UUID. Real conversion still needs configured email delivery.
+- Settings > Library account supports email linking and password setup. For this deployment, the
+   hosted owner was provisioned separately with the exact source UUID, leaving local anonymous Auth
+   untouched. Its email must still be verified before owner restriction activation and password setup.
 - Migration033 adds inactive-local restrictive policies and an administrator-only activation RPC;
    later new tables also carry the restriction. Production startup refuses an unrestricted database.
 - Durable regular/grouped workers support automatic retries, separate reader jobs, paused intent,
@@ -69,16 +77,20 @@ activate this on the local development database. Re-run activation after future 
 
 ## Only Your Account
 
-- Link the actual Chrome library's existing anonymous owner to a permanent email identity before
-  cutover. Verify the email before setting a password, or use supported identity linking. Keep
-  the same Auth UUID so owner keys and private file paths stay unchanged. The shared VS Code
-  browser has a different test library and must not be used to choose the migration owner.
-- Disable public sign-ups and anonymous sign-ins in the hosted project after provisioning your
-  account. Do not change the local configuration while it is still used for development/tests.
-- Enable manual identity linking for conversion and configure email delivery. Include `{{ .Token }}`
-   in Magic Link and Change Email templates for code entry. Set Site URL to the hosted origin and
-   allow the exact Mac localhost redirect. Rehearse conversion/recovery; local email capture may not
-   be running. Rotate the secret pasted into chat and enter replacement credentials directly.
+- The permanent hosted owner uses the actual Chrome library's UUID. Verify the chosen email before
+   activation and password setup; do not mark it verified administratively. The shared VS Code
+   browser's anonymous test library must not be selected for migration.
+- Hosted public and anonymous sign-ups are disabled, and minimum password length is12. Local
+   development Auth is unchanged. Hosted changes used an isolated minimal config under `.novelist`;
+   never push the local development config to the linked production project without reviewing its diff.
+- Supabase Free with the default email provider rejected custom email-template changes. Use its
+   built-in sign-in links; the app supplies an exact callback origin and handles PKCE verification.
+   Custom code-only templates require custom SMTP or a paid plan. The code-entry fallback is still
+   available if an email includes a code. Hosted OTP expiry is15minutes; actual delivery/verification
+   remains to be tested by the owner. No account email was sent by the assistant's automated tests.
+- Temporary Site URL and redirect are `http://127.0.0.1:5174`. Replace Site URL with the final Render
+   HTTPS origin and add the intended Mac ingestion callback before launch. Open the verification email
+   in the same browser that requested it. Rotate the exposed secret key before uploading private data.
 - Retain all existing owner RLS, composite owner foreign keys, private bucket policies and
    security-invoker functions. Activate the shipped restrictive owner allowlist policy on all
   application tables and private Storage objects as defense in depth. Test it with a second
@@ -113,6 +125,9 @@ steps. Do not delete the local volumes or any local Auth owner.
    application data in the reviewed order; avoid running data-transformation triggers a second
    time. Test recovery of the permanent identity with a new hosted login. Old local JWTs are not
    portable hosted credentials even when their user ID is preserved.
+   For this deployment, the email identity was provisioned through Auth instead of copying the
+   anonymous Auth record. Account type, confirmation state and email identity IDs will differ by
+   design; verify those changes separately while preserving all application rows and object paths.
 6. Compare the manifest and validate all chapter downloads, translation versions, guide coverage,
    glossary selections, folders and progress. Open representative original/translated chapters
    on the phone and confirm the exact chapter, language, version and scroll position.
@@ -167,11 +182,13 @@ restore checks. A matching manifest alone is not a migration certification.
 
 ## Inputs Still Needed for Live Deployment
 
-CLI account authorization, database restore credentials, app-host account/domain and region.
-The target project and permanent login email were supplied; account conversion is still pending.
+Owner email verification, key-rotation confirmation, GitHub authorization, the app-host account/domain
+and a reviewed data-transfer method. The Supabase project is linked and its schema is deployed.
+Managed PostgreSQL does not grant this connection `SET session_replication_role`; do not assume a
+superuser-style restore will work or bypass data-transformation triggers without a tested procedure.
 Secrets should be entered directly into the terminal or hosting dashboards, not pasted into chat.
-The production API/auth code is implemented. Permanent account conversion, email delivery,
-rehearsed data/file restoration and physical-phone access remain launch gates.
+The production API/auth code is implemented. Verified account access, rehearsed data/file restoration
+and physical-phone access remain launch gates.
 
 ## Official References
 

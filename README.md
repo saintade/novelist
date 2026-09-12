@@ -129,11 +129,14 @@ to that phone, not this development machine. Phone layouts are browser-emulation
 not tested on physical devices.
 
 Supabase Cloud plus a Render Free Node service is the selected private hosting setup. The
-production server, permanent sign-in and restrictive owner policies are implemented, but the
-hosted restore/deployment is pending CLI authorization. `npm run build && npm start` serves the
+production server, permanent sign-in and restrictive owner policies are implemented. The hosted
+schema is deployed and the preserved owner account awaits email verification; library-data transfer,
+GitHub push and Render deployment are still pending. `npm run build && npm start` serves the
 app and API with production configuration. Static hosting alone cannot run the worker. See
 [note.txt](note.txt) for exact Render settings and the [deployment guide](docs/deployment.md) for
 owner-preserving migration. Free Render can sleep or restart; saved jobs/results remain in Supabase.
+Private sign-in supports Supabase's built-in email links with same-origin callbacks, plus passwords
+and optional email-code entry. Code-only email templates are not required for Free-tier deployment.
 
 Imports support unencrypted reflowable EPUBs and plain text, up to 50 MB per file. Complex
 fixed layouts, DRM, PDF, and cross-chapter EPUB footnote navigation are not supported.
