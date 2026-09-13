@@ -1,16 +1,17 @@
 # Private Hosted Novelist
 
-Status: Supabase CLI is authenticated and linked to `klkjphqfzzbcecksdwtw`. All55 application
-migrations through202609110043 are deployed to the initially empty hosted PostgreSQL17 project in
-us-east-1. Table RLS and the private bucket were verified after deployment. A permanent hosted owner
-was provisioned with the preserved UUID and chosen email, without a password or verified-email flag.
-Email verification, application-data/file transfer, GitHub push and Render deployment remain pending.
+Status (2026-09-12): Supabase project `klkjphqfzzbcecksdwtw` has all56 migrations through
+202609110044 and the migrated library:3 books,165 current chapter translations, one metadata
+preview,876 downloaded originals and876 private files. The permanent owner verified their email;
+the exact owner UUID and restrictive table/Storage policies are active. All30 owner-table row/ID
+fingerprints and every file's SHA-256 matched after the hosted restore. GitHub push, Render deployment
+and physical-phone sign-in remain pending. Password setup requires hidden terminal input.
 See [note.txt](../note.txt) for exact settings and current enrollment instructions.
 
-A private local rehearsal backup contains a readable PostgreSQL archive,30 owner-table fingerprints
-and874 SHA-256-verified files. It is not the final consistent cutover snapshot. Local Auth and the
-running library on port5173 were not switched, stopped or reset. Port5174 is a separate hosted-account
-verification preview with AI disabled; the library remains gated until owner activation.
+The verified transfer backup is under `.novelist/backups/hosted-transfer-2026-09-12T23-46-11.300Z/`:
+source snapshot, exact private file bytes and destination manifest. A separate pre-consolidation
+PostgreSQL backup retains the previous chapter versions. Local Auth, files and port5173 remain intact;
+port5174 uses hosted Supabase with AI disabled. These are separate databases, not continuous sync.
 
 ## Recommended Architecture
 
@@ -27,6 +28,55 @@ verification preview with AI disabled; the library remains gated until owner act
 An alternative is a private VPS with Node and Docker plus hosted Supabase, but it introduces
 server maintenance that is unnecessary for a reader-first phone deployment.
 
+## Password Setup
+
+Email links do not generate passwords. A PKCE link must open in the browser/profile that requested
+it; the VS Code browser is separate from Chrome/Safari. The app now reports missing-request or
+expired-link failures instead of silently returning to sign-in. No code is required for the default
+email template. The already-verified account can receive a password without another email link:
+
+```sh
+npm run account:password -- --project-ref klkjphqfzzbcecksdwtw --owner 28fd9dab-36c4-46b4-a96a-53583f44ff50
+```
+
+Enter and confirm the password at the hidden terminal prompts, never as a command argument or in
+chat. The command verifies the account, updates only its password, tests password login and library
+access, then closes its temporary session. Minimum length is8 at the owner's explicit request.
+No password has been generated, embedded in the app, or stored in these notes.
+
+## Deploy Free
+
+1. Run `gh auth login` in your terminal. After committing and secret-scanning, create the intended
+   private repository with `gh repo create novelist --private --source=. --remote=origin --push`.
+   Skip repository creation if you already created it; push to that repository instead.
+2. In Render, choose **New > Blueprint**, connect the private repository and review `render.yaml`.
+   It declares one **Free Node Web Service**, not a Render database. Keep Supabase as the database.
+3. Supply `VITE_AUTH_MODE=private`, the hosted Supabase URL and its publishable key,
+   `NOVELIST_ALLOWED_USER_ID=28fd9dab-36c4-46b4-a96a-53583f44ff50`, and
+   `NOVELIST_PUBLIC_ORIGIN=https://YOUR-SERVICE.onrender.com`. Use the exact assigned Render origin.
+   Leave `NOVELIST_ENABLE_LIVE_AI=false` and `OPENAI_API_KEY` empty for reading saved books.
+4. Build with `npm ci --include=dev && npm run build`; start with `npm start`; health path is `/health`.
+   Node24 is specified by the blueprint. Rebuild after changing any `VITE_` setting.
+5. In Supabase **Authentication > URL Configuration**, set Site URL to the Render HTTPS origin.
+   Allow that exact callback and `http://127.0.0.1:5174` for the Mac. Do not replace these with a
+   wildcard or push the root local-development Auth configuration.
+6. Open the Render URL in your phone browser, select **Use password**, and sign in. Open the vampire
+   book's **Translated** tab. Add the page to the home screen if desired. Saved reading works with
+   the Mac off; scraping still requires the Mac bridge. Enable hosted AI only when accepting its fees.
+7. For future ingestion, sign into the hosted-connected Mac app on5174 and point the extension's
+   connection setting there. Port5173 still writes to the old local copy. Do not run two independent
+   writing libraries expecting automatic synchronization. Keep all local backups.
+
+Free-tier limits checked2026-09-12: Supabase includes500MB database,1GB files,5GB egress plus5GB
+cached egress, and may pause after a week of inactivity; automatic backups are not included. Render
+Free has750 shared instance-hours/month, sleeps after15idle minutes, and may take about a minute
+to wake. It can restart or suspend for quota/traffic limits. Do not add keep-alive traffic to evade
+these limits. Reading within quotas can cost$0; OpenAI translation/extractor calls are not free.
+
+A static host such as Cloudflare Pages can serve an already-downloaded library using Supabase,
+but cannot run this app's Node translation, guide or administrative API. The existing Render
+blueprint is the least-change route to the complete experience. No public frontend is deployed yet.
+
 ## Implemented Preparation
 
 - `npm start` runs `server/index.ts` directly under Node24. It serves only `dist`, supports nested
@@ -34,14 +84,14 @@ server maintenance that is unnecessary for a reader-first phone deployment.
    routes are not served. The API checks the exact configured HTTPS Host and Origin.
 - Hosted operations validate a permanent Supabase user and `NOVELIST_ALLOWED_USER_ID`, then use
    that user's JWT with RLS. The app server needs no Supabase secret/service-role key.
-- Private sign-in supports passwords, built-in email links and optional email OTP for existing accounts, not public registration.
+- Private sign-in supports passwords and built-in email links for existing accounts, not public registration.
    An activated database owner restriction is required before the library mounts. Refresh retains
    the reader; sign-out/account changes clear access. Hosted mode never silently seeds a new library.
 - Localhost with local Supabase keeps anonymous development. Remote Supabase or a non-localhost app
    requires private sign-in. Use `VITE_AUTH_MODE=private` explicitly in hosted and Mac ingestion builds.
 - Settings > Library account supports email linking and password setup. For this deployment, the
    hosted owner was provisioned separately with the exact source UUID, leaving local anonymous Auth
-   untouched. Its email must still be verified before owner restriction activation and password setup.
+   untouched. Its email is now verified and the hosted owner restriction is active.
 - Migration033 adds inactive-local restrictive policies and an administrator-only activation RPC;
    later new tables also carry the restriction. Production startup refuses an unrestricted database.
 - Durable regular/grouped workers support automatic retries, separate reader jobs, paused intent,
@@ -80,7 +130,7 @@ activate this on the local development database. Re-run activation after future 
 - The permanent hosted owner uses the actual Chrome library's UUID. Verify the chosen email before
    activation and password setup; do not mark it verified administratively. The shared VS Code
    browser's anonymous test library must not be selected for migration.
-- Hosted public and anonymous sign-ups are disabled, and minimum password length is12. Local
+- Hosted public and anonymous sign-ups are disabled, and minimum password length is8 by explicit owner choice. Local
    development Auth is unchanged. Hosted changes used an isolated minimal config under `.novelist`;
    never push the local development config to the linked production project without reviewing its diff.
 - Keep `[auth].enable_signup = false` but `[auth.email].enable_signup = true`. The email-specific
@@ -90,12 +140,13 @@ activate this on the local development database. Re-run activation after future 
    `mailer_autoconfirm: false`; email confirmation must remain required.
 - Supabase Free with the default email provider rejected custom email-template changes. Use its
    built-in sign-in links; the app supplies an exact callback origin and handles PKCE verification.
-   Custom code-only templates require custom SMTP or a paid plan. The code-entry fallback is still
-   available if an email includes a code. Hosted OTP expiry is15minutes; actual delivery/verification
-   remains to be tested by the owner. No account email was sent by the assistant's automated tests.
+   The private sign-in screen has no code-entry step. Hosted OTP expiry is15minutes. Email delivery
+   and account confirmation occurred, but the user's PKCE session did not complete across browsers.
+   Password login is available through the secure command above; no verification flag was bypassed.
 - Temporary Site URL and redirect are `http://127.0.0.1:5174`. Replace Site URL with the final Render
    HTTPS origin and add the intended Mac ingestion callback before launch. Open the verification email
-   in the same browser that requested it. Rotate the exposed secret key before uploading private data.
+   in the same browser that requested it. The owner elected to proceed without rotating the previously
+   shared secret key; rotation remains recommended and must not be represented as completed.
 - Retain all existing owner RLS, composite owner foreign keys, private bucket policies and
    security-invoker functions. Activate the shipped restrictive owner allowlist policy on all
   application tables and private Storage objects as defense in depth. Test it with a second
@@ -187,13 +238,16 @@ restore checks. A matching manifest alone is not a migration certification.
 
 ## Inputs Still Needed for Live Deployment
 
-Owner email verification, key-rotation confirmation, GitHub authorization, the app-host account/domain
-and a reviewed data-transfer method. The Supabase project is linked and its schema is deployed.
-Managed PostgreSQL does not grant this connection `SET session_replication_role`; do not assume a
-superuser-style restore will work or bypass data-transformation triggers without a tested procedure.
+Secure password entry or successful browser email login, GitHub authorization and the Render account/domain
+are still needed. Email verification, owner restriction and the complete owner-only data/file transfer
+are finished. Managed PostgreSQL does not grant `SET session_replication_role`; the tested restore uses
+the CLI role's existing `postgres` membership, temporarily disables only user triggers inside one
+transaction, keeps foreign keys active, and verifies exact rows before commit. Re-running the transfer
+against an already populated destination is rejected, not treated as an overwrite or synchronization.
 Secrets should be entered directly into the terminal or hosting dashboards, not pasted into chat.
-The production API/auth code is implemented. Verified account access, rehearsed data/file restoration
-and physical-phone access remain launch gates.
+The production API/auth code is implemented. Actual password sign-in and physical-phone access remain
+launch gates. Hosted SQL/RLS checks allowed the real owner and denied another identity, an anonymous
+session and a public Storage URL; those checks are not a substitute for the owner's browser login.
 
 ## Official References
 

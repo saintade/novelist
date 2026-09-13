@@ -216,6 +216,41 @@ extension, changing the captured source or disconnecting can clear the queue. St
 again to skip completed chapters. It is not a persistent cross-device or unattended download scheduler.
 Existing per-chapter text, pagination and access-review limits still apply.
 
+### Live Source Audit (2026-09-12)
+
+Ten domains were visited using normal browser navigation. Four reached an installed-extension
+download test in fresh, isolated local profiles. No proxies, stealth changes, CAPTCHA solving,
+certificate bypasses or paid/login-only chapters were used. A challenge stopped that site.
+
+| Site | Observed result | Saved sample chapters |
+| --- | --- | --- |
+| www.69shuba.com | Extension captured569 distinct directory links; sandbox-generated extractor passed and was reused for the next two chapters. | 3 |
+| www.novel543.com | Directory captured754 links; first chapter navigation required browser verification in the isolated profile. | 0 |
+| 101kks.com | Landing page exposed6 recent links, not a full scan; chapter verification stopped the batch. Existing scraper was available. | 0 |
+| twkan.com | Initial directory page exposed36 links; chapter verification stopped the batch. | 0 |
+| www.qidian.com | Homepage displayed a slider verification challenge; left without interacting with it. | 0 |
+| www.uukanshu.com | Connection refused. | 0 |
+| www.shuhaige.net | HTTP/2 protocol failure. | 0 |
+| www.zongheng.com / read.zongheng.com | Catalog loaded slowly; its visible public reading link returned an error page and HTTP403. | 0 |
+| www.shukuge.com | Certificate authority validation failed; not bypassed. | 0 |
+| www.17k.com | Navigation timed out without a usable document. | 0 |
+
+The three 69shuba samples contained93,95 and95 paragraphs (2,428 / 2,602 / 2,716 characters).
+Stored JSON SHA-256 checks passed. One paid model request used6,924 input and866 output tokens;
+the remaining two extracts used cached code. This stayed below the approved nine-request ceiling.
+Artifacts and extension screenshots are private under `.novelist/source-audits/`; the successful
+run is `2026-09-13T00-51-47.486Z` (UTC). No sample book was added to the real hosted library.
+
+This is1 demonstrated end-to-end success among10 probed domains, not a universal allow/block list.
+Verification, page availability and layouts can differ by session or book. Book headings and
+observed links were registered manually for the audit; AI metadata identification and complete
+multi-page inventories were not measured. The failed sites were not retried with evasion techniques.
+
+Reproduce only with permission: build the extension, then `npm run audit:sources -- --site 69shuba`.
+New generation is off by default; `--allow-model` authorizes at most one three-attempt operation
+per tested site and three operations per invocation. Separate invocations have separate caps:
+track the combined budget yourself. The actual run above made only one paid request total.
+
 ### Contents and Reading Order
 
 Identification returns representative chapter links, which may come from a latest-updates section.

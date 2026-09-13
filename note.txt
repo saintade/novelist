@@ -1,26 +1,32 @@
 NOVELIST: PRIVATE PHONE ACCESS ON FREE HOSTING
 
 Status
-Supabase CLI is signed in and linked. All 55 application migrations through
-202609110043 are deployed to the hosted project in us-east-1 (PostgreSQL 17).
-The private bucket and table RLS were verified. A permanent hosted account was
-provisioned with the existing owner UUID and chosen email; email verification is
-still pending. No password was assigned or email verification bypassed.
+Supabase CLI is signed in and linked. All 56 migrations through 202609110044
+are deployed to the hosted project in us-east-1. The real owner is email-verified
+and the private owner restriction is active. Migration completed: 3 books,
+165 current chapter translations, one metadata preview, 876 original chapters
+and 876 private files. All 30 owner-table fingerprints and file SHA-256 hashes
+matched. The local library was not removed or reset.
 
-Library records and Storage files have NOT been copied to the hosted project.
-The normal Mac app at http://127.0.0.1:5173 still uses the local library. GitHub
-sign-in/push and Render deployment are still pending.
+Hosted-connected Mac app: http://127.0.0.1:5174 (AI currently disabled).
+Port 5173 still uses the separate local database; it is NOT a live cloud sync.
+GitHub authorization/push and the Render frontend deployment remain pending.
 
-Account verification preview: http://127.0.0.1:5174 on the Mac, with AI disabled.
-Enter the chosen email, use Email sign-in link, and follow the emailed link in
-the same browser. The private library remains gated until its owner restriction
-is activated after verification. Never enter verification codes in chat.
+PASSWORD SETUP
+The email link verifies/signs in; it does not generate a password or email code.
+The VS Code browser and Chrome/Safari have separate PKCE request state. Use the
+same browser for requesting and opening a link, or set a password directly:
+   npm run account:password -- --project-ref klkjphqfzzbcecksdwtw --owner 28fd9dab-36c4-46b4-a96a-53583f44ff50
+Enter and confirm it only in the hidden terminal prompts. Minimum length is 8
+as explicitly requested. No password is embedded in code or these notes. Until
+those prompts complete, the helper has not assigned a password. Then use
+Email + Use password in the app, including after frontend deployment.
 
-A private rehearsal backup is under
-.novelist/backups/hosted-rehearsal-2026-09-12T03-46-24.764Z/
-It contains a PostgreSQL archive, 30 owner-table fingerprints and 874 verified
-files (5,531,192 bytes). It is a rehearsal snapshot, not a final cutover snapshot.
-The archive is a local recovery backup, not a dump to restore blindly to cloud.
+Verified transfer backup:
+.novelist/backups/hosted-transfer-2026-09-12T23-46-11.300Z/
+It contains the exact source rows, 876 file copies and the target manifest.
+A separate pre-consolidation PostgreSQL archive preserves older translations.
+These private backups are ignored by Git and are not blind cloud-restore dumps.
 
 Rotate the Supabase secret key that was pasted in chat. Enter replacement secrets
 only in your terminal or hosting dashboards, never in this file or in Git.
@@ -35,7 +41,7 @@ The application server needs only the Supabase publishable key, not a secret key
    password. A direct restore connection, if needed, must be configured privately.
    The intended GitHub repository is a new PRIVATE repository named novelist.
 
-2. MIGRATE THE EXISTING LIBRARY FIRST
+2. MIGRATION COMPLETE; PRESERVE THE BACKUPS
    Target project: klkjphqfzzbcecksdwtw
    Supabase URL: https://klkjphqfzzbcecksdwtw.supabase.co
    Existing library owner UUID: 28fd9dab-36c4-46b4-a96a-53583f44ff50
@@ -43,10 +49,9 @@ The application server needs only the Supabase publishable key, not a secret key
    folders and reading positions. The shared VS Code browser has a different test
    account; do not migrate that account instead.
 
-   Verify the provisioned hosted owner using the account preview. Its UUID is
-   identical to the source owner; the local anonymous account is unchanged.
-   Once the hosted library is activated, set a password in Library account.
-   Rehearse schema/Auth compatibility and restoration before the final cutover.
+   The verified hosted owner has the exact source UUID; local anonymous Auth is
+   unchanged. The owner-only restore was rehearsed with rollback, then copied
+   and verified. Do not rerun migration:copy on the populated hosted library.
    Use a private backup, preserve migration history and copy Storage bytes
    separately. SQL backups alone do not contain the chapter file bytes.
    Do not reset Supabase, delete local volumes or blindly replay data migrations.
@@ -66,7 +71,7 @@ The application server needs only the Supabase publishable key, not a secret key
    Pause writes only during the agreed final snapshot/copy window.
 
 3. LOCK DOWN THE HOSTED PROJECT
-   The permanent account is provisioned but still needs email verification.
+   The permanent account is email-verified and owner restriction is active.
    Public sign-ups and anonymous sign-ins are disabled on the HOSTED project.
    Keep the library bucket PRIVATE. Retain all owner RLS policies.
    In the hosted SQL editor, after restoring and verifying the account:
@@ -81,8 +86,10 @@ The application server needs only the Supabase publishable key, not a secret key
    redirect before cutover. The app uses built-in email sign-in links by default.
    Supabase rejected custom email-template changes on this Free project with the
    default provider; custom code-only templates need custom SMTP or a paid plan.
-   Do not add either merely for login. Code entry remains an optional fallback
-   when the provider includes a code. Actual email delivery still needs testing.
+   Do not add either merely for login. The app now uses links without a code
+   prompt, and shows actionable errors for missing or expired PKCE requests.
+   Keep global auth.enable_signup=false but auth.email.enable_signup=true;
+   the latter is required even for existing-account email login.
 
    Hosted-only Auth changes were applied from the ignored minimal configuration
    at .novelist/hosted-auth/supabase/config.toml. Do not push the local development
@@ -127,7 +134,7 @@ The application server needs only the Supabase publishable key, not a secret key
    on localhost. The extension still downloads through the Mac into the same
    hosted library. Scraping does not run on Render. Keep local backups intact.
 
-FREE-TIER LIMITS (CHECKED 2026-09-11)
+FREE-TIER LIMITS (CHECKED 2026-09-12)
 Supabase Free: 500 MB database, 1 GB files, 5 GB egress plus 5 GB cached egress;
 projects can pause after one week of inactivity. Automatic backups are not
 included. Render Free sleeps after 15 idle minutes and can take about a minute
@@ -143,10 +150,9 @@ Vercel would require adapting the worker to serverless/background infrastructure
 Render is the compatible free option for the existing server.
 
 LIBRARY SIZE AND COMPRESSION
-Read-only sample: 3 books, 682 downloaded chapters, 57 translation versions,
-about 4.9 MB of chapter files and 6.9 MB of logical owner row payloads. Counts
-grow as you read/download/translate. Database indexes and saved context add to
-capacity; the 1 GB file allowance is not the only limit on book count.
+Migrated snapshot: 3 books, 876 downloaded chapters and 165 current chapter
+translations. Counts grow as you read/download/translate. Database indexes and
+saved context add to capacity; the 1 GB file allowance is not the only limit.
 
 PostgreSQL already compresses large text/JSON with TOAST/pglz. On local copies
 of 61 translation rows, pglz used 2.61 MB versus LZ4's 2.83 MB, so pglz was kept.
@@ -156,6 +162,11 @@ use gzip only when it saves at least 10%; a 30-chapter real-data sample saved
 decompression, and verify the same original-text SHA-256 hash after decoding.
 
 TRANSLATION BEHAVIOR
+The book's Translated tab lists saved chapter titles and opens the current text.
+There is one current translation per chapter and language. A successful new
+translation or term edit replaces it atomically; failed results leave it intact.
+Originals and reading positions are retained. Chat is hidden/disabled in the reader.
+
 Regular Translate/Retranslate submits a durable one-chapter job and returns
 quickly. It can finish while you read elsewhere. Completion never redirects
 another book; return to the requested chapter to load it. Transient failures retry
@@ -196,7 +207,18 @@ only the final chapter and afterword remained. Both URLs passed direct-fetch
 checks. Refresh the local app, and pause/reload the unpacked extension before
 using the new concurrency controls. No new scraper generation is needed merely
 to load the controls. Migration 202609110043 was tested and applied locally
-and to the hosted schema; no private book data was copied during this update.
+and to the hosted schema. The later 044 migration and verified library transfer
+are now complete; the vampire book has all 754 originals and 165 current translations.
+
+LIVE SOURCE CHECK (2026-09-12)
+Ten domains were checked in normal browsers. The installed extension saved and
+hash-verified three 69shuba chapters; one paid extractor request generated its
+adapter, and the next two chapters reused it. Novel543, 101kks and TWKan stopped
+on chapter verification. Qidian showed a slider challenge. UUKanshu refused the
+connection, Shuhaige failed HTTP/2, Shukuge failed certificate validation, Zongheng
+returned 403 for its public reading link, and 17K never yielded a usable page.
+No challenge was solved or bypassed. Samples and adapters remain in isolated
+local audit accounts, not the real or hosted library. Details: docs/browser-extension.md.
 
 Groups share pre-group recent context and guide instructions. New translations
 and opt-in guide updates affect the next request; a 10-chapter group can pass

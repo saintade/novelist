@@ -92,6 +92,7 @@ test('private production sign-in isolates accounts and supports password and ema
   let writes = 0
   let anonymousRequests = 0
   let paidRequests = 0
+  let rejectCallback = false
   const failures: string[] = []
   page.on('pageerror', (error) => failures.push(error.message))
   page.on('request', (request) => {
@@ -126,14 +127,20 @@ test('private production sign-in isolates accounts and supports password and ema
   }
   const otpRequests: unknown[] = []
   const otpRedirects: (string | null)[] = []
+  const confirmationRequests: unknown[] = []
+  let needsConfirmation = false
   const passwordUpdates: unknown[] = []
   await page.route('https://private-library.supabase.test/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
     let body: unknown = {}
+    let responseStatus = 200
     if (path === '/auth/v1/signup') {
       anonymousRequests += 1
       body = { error: 'Unexpected anonymous provision' }
+    } else if (path === '/auth/v1/token' && rejectCallback) {
+      responseStatus = 400
+      body = { code: 'flow_state_not_found', msg: 'Invalid or expired verification request' }
     } else if (path === '/auth/v1/token' || path === '/auth/v1/verify') body = session
     else if (path === '/auth/v1/user') {
       body = user
@@ -142,7 +149,13 @@ test('private production sign-in isolates accounts and supports password and ema
     else if (path === '/auth/v1/otp') {
       otpRequests.push(request.postDataJSON())
       otpRedirects.push(new URL(request.url()).searchParams.get('redirect_to'))
-      body = {}
+      if (needsConfirmation) {
+        responseStatus = 422
+        body = { code: 'signup_disabled', msg: 'Signups not allowed for this instance' }
+      }
+    } else if (path === '/auth/v1/resend') {
+      confirmationRequests.push(request.postDataJSON())
+      expect(new URL(request.url()).searchParams.get('redirect_to')).toBe(origin)
     } else if (path === '/rest/v1/rpc/library_access_status') body = { restricted: true, allowed }
     else if (path.startsWith('/rest/v1/')) {
       dataRequests += 1
@@ -150,29 +163,37 @@ test('private production sign-in isolates accounts and supports password and ema
       body = []
     } else failures.push(`Unexpected request: ${path}`)
     await route.fulfill({
-      status: 200,
+      status: responseStatus,
       contentType: 'application/json',
+      headers: { 'x-supabase-api-version': '2024-01-01', 'access-control-expose-headers': 'x-supabase-api-version' },
       body: JSON.stringify(body),
     })
   })
+  await page.goto(`${origin}/?code=fixture-callback-without-request`)
+  await expect(page.getByRole('alert')).toContainText('Request a new link in the browser you are using now')
+  await expect(page.getByRole('alert')).not.toContainText('fixture-callback-without-request')
+  expect(dataRequests).toBe(0)
   await page.goto(`${origin}/read/example/42`)
   await expect(page.getByRole('heading', { name: 'Novelist', exact: true })).toBeVisible()
-  await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Email sign-in link', exact: true })).toBeVisible()
   await page.evaluate(() => document.fonts.ready)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('private-sign-in.png'), fullPage: true })
   expect(dataRequests).toBe(0)
   expect(anonymousRequests).toBe(0)
   await page.getByLabel('Email', { exact: true }).fill(user.email)
+  await page.getByRole('button', { name: 'Use password', exact: true }).click()
   await page.getByLabel('Password', { exact: true }).fill('fixture-password-123')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('cannot open the private library')
   expect(dataRequests).toBe(0)
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Email sign-in link', exact: true })).toBeVisible()
   allowed = true
   await page.goto(`${origin}/`)
   await page.getByLabel('Email', { exact: true }).fill(user.email)
+  await page.getByRole('button', { name: 'Use password', exact: true }).click()
   await page.getByLabel('Password', { exact: true }).fill('fixture-password-123')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.locator('.app-shell')).toBeVisible()
@@ -181,6 +202,7 @@ test('private production sign-in isolates accounts and supports password and ema
   await page.getByRole('button', { name: 'Library account', exact: true }).click()
   const account = page.getByRole('dialog', { name: 'Library account', exact: true })
   await expect(account).toContainText(user.id)
+  await expect(account.getByLabel('New password', { exact: true })).toHaveAttribute('minlength', '8')
   await account.getByLabel('New password', { exact: true }).fill('fixture-new-password-123')
   await account.getByRole('button', { name: 'Set password', exact: true }).click()
   await expect(account.getByRole('status')).toContainText('Password updated')
@@ -190,23 +212,34 @@ test('private production sign-in isolates accounts and supports password and ema
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('private-account.png'), fullPage: true })
   await account.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Email sign-in link', exact: true })).toBeVisible()
   await page.getByLabel('Email', { exact: true }).fill(user.email)
   await page.getByRole('button', { name: 'Email sign-in link', exact: true }).click()
   await expect(page.getByRole('status')).toHaveText('Sign-in email sent.')
   expect(otpRedirects).toEqual([origin])
+  rejectCallback = true
+  await page.goto(`${origin}/?code=fixture-expired-email-link-code`)
+  await expect(page.getByRole('alert')).toContainText('This email link could not complete sign-in')
+  await expect(page.getByRole('button', { name: 'Email sign-in link', exact: true })).toBeVisible()
+  rejectCallback = false
+  await page.getByLabel('Email', { exact: true }).fill(user.email)
+  await page.getByRole('button', { name: 'Email sign-in link', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('Sign-in email sent.')
   await page.goto(`${origin}/?code=fixture-email-link-code`)
   await expect(page.locator('.app-shell')).toBeVisible()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('button', { name: 'Library account', exact: true }).click()
   await page.getByRole('dialog', { name: 'Library account', exact: true }).getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Email sign-in link', exact: true })).toBeVisible()
   await page.getByLabel('Email', { exact: true }).fill(user.email)
+  needsConfirmation = true
   await page.getByRole('button', { name: 'Email sign-in link', exact: true }).click()
-  await page.getByRole('button', { name: 'Enter email code', exact: true }).click()
-  await page.getByLabel('Email code', { exact: true }).fill('123456')
-  expect(otpRequests).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ email: user.email, create_user: false })))
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('Sign-in email sent.')
+  await expect(page.getByRole('button', { name: 'Enter email code', exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Email code', { exact: true })).toHaveCount(0)
+  expect(otpRequests).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({ email: user.email, create_user: false })))
+  expect(confirmationRequests).toEqual([expect.objectContaining({ type: 'signup', email: user.email, code_challenge: expect.any(String), code_challenge_method: 's256' })])
+  await page.goto(`${origin}/?code=fixture-confirmation-link-code`)
   await expect(page.locator('.app-shell')).toBeVisible()
   expect(anonymousRequests).toBe(0)
   expect(paidRequests).toBe(0)

@@ -38,6 +38,7 @@ import { TranslationBatchManager } from '../../../server/ai/translation-batches'
 import { trackModelResponse } from '../../../server/ai/usage'
 import { createProductionApp } from '../../../server/http'
 import { createLibraryManifest, compareLibraryManifests } from '../../../scripts/library-manifest'
+import { readMigrationTables, restoreLibraryRows } from '../../../scripts/library-migration'
 import { runReaderChat } from '../../../server/ai/reader-chat'
 import { runReaderIndex, retrieveReaderPassages } from '../../../server/ai/reader-retrieval'
 import { discoverContents } from '../extension/contents'
@@ -329,7 +330,7 @@ describe.runIf(
     } finally { manager.stop(); await removeBook(bookId) }
   })
 
-  it('starts durable reader jobs before generation finishes and preserves retranslation versions', async () => {
+  it('starts durable reader jobs before generation finishes and replaces the current translation', async () => {
     const { book } = await saveBook(await importBook(new File(['Chapter 1\nOriginal reader chapter.'], `Reader-job-${crypto.randomUUID()}.txt`)))
     const token = (await supabase.auth.getSession()).data.session!.access_token
     const configuration = { supabaseUrl: import.meta.env.VITE_SUPABASE_URL, publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, apiKey: 'test-only', liveEnabled: true, model: 'test-only', root: '' }
@@ -363,8 +364,12 @@ describe.runIf(
       batchId = (await manager.startChapter(token, { ...request, requestId: crypto.randomUUID(), retranslate: true })).status!.batch!.id
       await manager.wait(batchId)
       expect(inferProvider).toHaveBeenCalledTimes(2)
-      expect((await supabase.from('book_translation_previews').select('id').eq('book_id', book.id)).data).toHaveLength(2)
-      expect((await supabase.from('book_translation_previews').select('id,result').eq('id', original.id).single()).data).toEqual(original)
+      const current = await supabase.from('book_translation_previews').select('id,result').eq('book_id', book.id).single()
+      expect(current.error).toBeNull()
+      expect(current.data?.id).not.toBe(original.id)
+      expect(current.data?.result).toMatchObject({ paragraphs: ['Reader translation version 2.'] })
+      expect((await supabase.from('book_translation_previews').select('id').eq('id', original.id).maybeSingle()).data).toBeNull()
+      expect((await supabase.from('translation_batch_chapters').select('preview_id').eq('batch_id', queued.status!.batch!.id)).data).toEqual([{ preview_id: current.data!.id }])
       await expect(manager.startChapter(token, { ...request, requestId: batchId, retranslate: false })).rejects.toThrow('different range')
     } finally { release(); manager.stop(); if (batchId) await manager.wait(batchId); await removeBook(book.id) }
   }, 30000)
@@ -667,15 +672,36 @@ describe.runIf(
     const database = new Client({ host: '127.0.0.1', port: 55322, user: 'postgres', password: 'postgres', database: 'postgres' })
     try {
       await database.connect()
-      const source = await createLibraryManifest(database, supabase, ownerId)
+      const capturedRows = new Map<string, string[]>()
+      const capturedObjects = new Map<string, string>()
+      const source = await createLibraryManifest(database, supabase, ownerId, {
+        rows: async (table, rows) => { capturedRows.set(table, [...(capturedRows.get(table) ?? []), ...rows]) },
+        object: async (path, bytes) => { capturedObjects.set(path, createHash('sha256').update(bytes).digest('hex')) },
+      })
       expect(source.ownerId).toBe(ownerId)
       expect(source.tables.books.count).toBeGreaterThanOrEqual(1)
       expect(source.objects.some(object => object.path.includes(book.id))).toBe(true)
       expect(source.objects.every(object => object.path.startsWith(`${ownerId}/`) && object.bytes > 0 && object.sha256.length === 64)).toBe(true)
+      for (const [table, fingerprint] of Object.entries(source.tables)) {
+        expect(capturedRows.get(table)).toHaveLength(fingerprint.count)
+        expect(createHash('sha256').update(capturedRows.get(table)!.map(row => row + '\n').join('')).digest('hex')).toBe(fingerprint.rowsHash)
+      }
+      for (const object of source.objects) expect(capturedObjects.get(object.path)).toBe(object.sha256)
       const target = await createLibraryManifest(database, supabase, ownerId)
       expect(compareLibraryManifests(source, target)).toEqual([])
       target.objects[0].sha256 = 'a'.repeat(64)
       expect(compareLibraryManifests(source, target)).toEqual([`Storage object differs: ${target.objects[0].path}`])
+      const tables = await readMigrationTables(database)
+      await database.query('begin')
+      try {
+        for (const table of tables) await database.query(`alter table public."${table.name}" disable trigger user`)
+        for (const table of [...tables].reverse()) await database.query(`delete from public."${table.name}" where owner_id=$1`, [ownerId])
+        for (const table of tables) await database.query(`alter table public."${table.name}" enable trigger user`)
+        await restoreLibraryRows(database, tables, source, capturedRows)
+        expect((await database.query('select count(*)::int as count from public.books where owner_id=$1', [ownerId])).rows[0].count).toBe(source.tables.books.count)
+        expect((await database.query("select count(*)::int as count from pg_trigger where tgrelid='public.books'::regclass and not tgisinternal and tgenabled<>'O'")).rows[0].count).toBe(0)
+        await expect(restoreLibraryRows(database, tables, source, capturedRows)).rejects.toThrow('already contains owner data')
+      } finally { await database.query('rollback') }
       expect((await database.query('show transaction_read_only')).rows[0].transaction_read_only).toBe('off')
     } finally { await database.end(); await removeBook(book.id) }
   }, 30000)
@@ -844,7 +870,8 @@ describe.runIf(
       await runReaderIndex(token, input, configuration)
       const previousIndex = await supabase.from('reader_search_documents').select('id').eq('book_id', book.id).eq('variant', 'translation:en').single()
       expect(previousIndex.error).toBeNull()
-      expect((await supabase.from('book_translation_previews').insert({ book_id: book.id, kind: 'chapter', source_key: 'local:0', target_language: 'en', result: { title: 'Chapter 1', paragraphs: ['The corrected compass points north.'], terminology: [] }, context: { source: { sourceId } } })).error).toBeNull()
+      expect((await supabase.from('book_translation_previews').update({ id: crypto.randomUUID(), result: { title: 'Chapter 1', paragraphs: ['The corrected compass points north.'], terminology: [] } }).eq('id', version.data!.id)).error).toBeNull()
+      expect((await supabase.from('reader_search_documents').select('id').eq('id', previousIndex.data!.id)).data).toEqual([])
       await runReaderIndex(token, input, configuration)
       expect((await supabase.from('reader_search_documents').select('id').eq('book_id', book.id).eq('variant', 'translation:en')).data).toHaveLength(1)
       expect((await supabase.rpc('search_reader_passages', { document_ids: [previousIndex.data!.id], query_terms: ['obsolete', 'astrolabe'] })).data).toEqual([])
@@ -1685,13 +1712,15 @@ describe.runIf(
       expect(nextBatch.examples.map((example: { fileName: string }) => example.fileName)).toEqual(['Generated translation / Chapter 125'])
       expect(automatic.context?.recentTranslations?.map(chapter => chapter.url)).toEqual([126, 127, 128].map(number => `${sourceUrl}/${number}`))
       expect((await runReadingGuide(token, { bookId: book.id, sourceKey: `${sourceUrl}/130` }, configuration)).history).toHaveLength(2)
-      const newerVersion = await insertTranslation(123)
+      const replacement = await supabase.from('book_translation_previews').update({ id: crypto.randomUUID(), result: translated(123), created_at: new Date().toISOString() }).eq('id', oldVersion).select('id').single()
+      expect(replacement.error).toBeNull()
+      const newerVersion = replacement.data!.id
       expect(newerVersion).not.toBe(oldVersion)
       const stale = await runReadingGuide(token, { bookId: book.id, sourceKey: `${sourceUrl}/130` }, configuration)
       expect(stale).toMatchObject({ covered: 0, total: 4, remaining: 4, updated: false, instructions: '' })
       expect((await runBookTranslation(token, { ...input, action: 'context' }, configuration)).context?.style).toBe('')
       expect(inferProvider).toHaveBeenCalledTimes(3)
-      expect((await supabase.from('book_translation_previews').select('id').eq('id', oldVersion).single()).data?.id).toBe(oldVersion)
+      expect((await supabase.from('book_translation_previews').select('id').eq('id', oldVersion).maybeSingle()).data).toBeNull()
     } finally {
       if (paths.length) await supabase.storage.from('library').remove(paths)
       await removeBook(book.id)
@@ -2277,6 +2306,8 @@ describe.runIf(
         config,
       )
       expect(repeated).toMatchObject({ termsSaved: 0 })
+      await saveSourceProgress(sourceId, chapterUrl, 0.63, { language: 'en', versionId: repeated.previewId! })
+      expect((await supabase.from('reading_progress').upsert({ book_id: imported.book.id, chapter: 0, fraction: 0.63, status: 'reading', source_id: sourceId, source_chapter_url: chapterUrl, target_language: 'en', translation_version: repeated.previewId! })).error).toBeNull()
       const requestsBeforeEdit = inferProvider.mock.calls.length
       const edited = await editBookTranslationTerm(
         token,
@@ -2293,15 +2324,21 @@ describe.runIf(
       )
       expect(edited.translation.paragraphs).toEqual(['Preferred prose.'])
       expect(edited.previewId).not.toBe(repeated.previewId)
-      expect(
-        (
-          await supabase
-            .from('book_translation_previews')
-            .select('result')
-            .eq('id', repeated.previewId!)
-            .single()
-        ).data?.result,
-      ).toMatchObject({ paragraphs: ['Translated prose.'] })
+      const currentTranslation = await supabase.from('book_translation_previews').select('id,result')
+        .eq('book_id', imported.book.id).eq('source_key', chapterUrl).eq('kind', 'chapter').eq('target_language', 'en')
+      expect(currentTranslation.data).toEqual([{ id: edited.previewId, result: edited.translation }])
+      expect((await supabase.from('book_translation_previews').select('id').eq('id', repeated.previewId!).maybeSingle()).data).toBeNull()
+      expect((await supabase.from('source_translation_progress').select('chapter_url,fraction,translation_version').eq('source_id', sourceId).eq('target_language', 'en').single()).data)
+        .toEqual({ chapter_url: chapterUrl, fraction: 0.63, translation_version: edited.previewId })
+      expect((await supabase.from('reading_progress').select('target_language,translation_version').eq('book_id', imported.book.id).single()).data)
+        .toEqual({ target_language: 'en', translation_version: edited.previewId })
+      const staleEdit = await supabase.rpc('save_translation_term_edit', {
+        preview_id: repeated.previewId!, source_spelling: 'Original', previous_target: 'Translated',
+        preferred_target: 'Stale choice', preferred_category: 'concept', preferred_scope: 'novel',
+        preferred_sense: 'Fixture term', preferred_aliases: [], edited_result: edited.translation as unknown as Json,
+      })
+      expect(staleEdit.error?.code).toBe('40001')
+      expect((await supabase.from('book_translation_previews').insert({ book_id: imported.book.id, kind: 'chapter', source_key: chapterUrl, target_language: 'en', result: translatedDraft, context: reviewed.context as unknown as Json })).error?.code).toBe('23505')
       expect(
         (
           await supabase
@@ -2361,6 +2398,10 @@ describe.runIf(
         consumed_output: 0,
       })
       expect(rejected.error?.message).toContain('evidence')
+      expect((await supabase.from('book_translation_previews').select('result').eq('id', edited.previewId).single()).data?.result)
+        .toEqual(edited.translation)
+      expect((await supabase.from('source_translation_progress').select('translation_version,fraction').eq('source_id', sourceId).eq('target_language', 'en').single()).data)
+        .toEqual({ translation_version: edited.previewId, fraction: 0.63 })
       expect(
         (
           await supabase

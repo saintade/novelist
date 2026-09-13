@@ -98,11 +98,8 @@ export function SourceTranslationReader({
   const [recovery, setRecovery] = useState<{ id: string; language: string; requestKind: string } | null>(null)
   const [recoveryConsent, setRecoveryConsent] = useState(false)
   const busy = working || Boolean(pendingJob)
-  const requestedVersion = parameters.get('version')
-  const selectionKey = JSON.stringify([lookupKey, requestedVersion])
-  const matchingVersions = versions.filter((version) => version.key === lookupKey)
-  const saved = (requestedVersion ? matchingVersions.find((version) => version.id === requestedVersion) : matchingVersions[0]) ?? null
-  const checking = !loaded || checkedKey !== selectionKey
+  const saved = versions.find((version) => version.key === lookupKey) ?? null
+  const checking = !loaded || checkedKey !== lookupKey
   const translated = parameters.has('translated')
   const showingTranslation = translated && Boolean(saved) && !checking
   const requestedLanguage = parameters.get('translated')
@@ -158,7 +155,8 @@ export function SourceTranslationReader({
   useEffect(() => {
     if (!loaded) return
     let cancelled = false
-    const read = async () => {
+    let request = 0
+    const read = async (currentRequest: number) => {
       setLookupError('')
       const digest = await crypto.subtle.digest(
         'SHA-256',
@@ -167,7 +165,7 @@ export function SourceTranslationReader({
       const hash = [...new Uint8Array(digest)]
         .map((value) => value.toString(16).padStart(2, '0'))
         .join('')
-      const versionQuery = () => supabase
+      const result = await supabase
         .from('book_translation_previews')
         .select('id,result,created_at,model,input_tokens,output_tokens,glossary:context->glossary,warnings:context->warnings')
         .eq('book_id', book.id)
@@ -176,54 +174,50 @@ export function SourceTranslationReader({
         .eq('target_language', language)
         .eq('context->source->>sourceId', source.id)
         .eq('context->source->>hash', hash)
-      const result = await versionQuery()
         .order('created_at', { ascending: false })
-        .limit(20)
+        .order('id', { ascending: false })
+        .limit(1)
       if (result.error) throw new Error(result.error.message)
-      if (requestedVersion && !result.data.some(row => row.id === requestedVersion)) {
-        const selectedVersion = await versionQuery().eq('id', requestedVersion).maybeSingle()
-        if (selectedVersion.error) throw new Error(selectedVersion.error.message)
-        if (!selectedVersion.data) throw new Error('This translation version is no longer available for the saved original. Choose Original or another saved version.')
-        result.data.push(selectedVersion.data)
-      }
       const position = await supabase.from('source_translation_progress').select('chapter_url,fraction,updated_at,translation_version').eq('source_id', source.id).eq('target_language', language).maybeSingle()
       if (position.error) throw new Error(position.error.message)
-      if (!cancelled) setTranslationPosition(position.data)
-      if (!cancelled)
+      if (!cancelled && currentRequest === request) {
+        setTranslationPosition(position.data)
         setVersions(
-          result.data.flatMap((row) => {
+          result.data.map((row) => {
             const parsed = chapterTranslationSchema.safeParse(row.result)
-            return parsed.success
-              ? [
-                  {
-                    id: row.id,
-                    translation: parsed.data,
-                    key: lookupKey,
-                    createdAt: row.created_at,
-                    model: row.model,
-                    inputTokens: row.input_tokens,
-                    outputTokens: row.output_tokens,
-                    termContext: { glossary: row.glossary ?? [], warnings: row.warnings ?? [] },
-                  },
-                ]
-              : []
+            if (!parsed.success) throw new Error('The saved translation could not be read. Its stored text has not been replaced.')
+            return {
+              id: row.id,
+              translation: parsed.data,
+              key: lookupKey,
+              createdAt: row.created_at,
+              model: row.model,
+              inputTokens: row.input_tokens,
+              outputTokens: row.output_tokens,
+              termContext: { glossary: row.glossary ?? [], warnings: row.warnings ?? [] },
+            }
           }),
         )
+      }
     }
-    read()
-      .catch((failure) => {
-        if (!cancelled)
-          setLookupError(
-            failure instanceof Error ? failure.message : 'Saved translation could not be read.',
-          )
-      })
-      .finally(() => {
-        if (!cancelled) setCheckedKey(selectionKey)
-      })
+    const refresh = () => {
+      const currentRequest = ++request
+      void read(currentRequest)
+        .catch((failure) => {
+          if (!cancelled && currentRequest === request)
+            setLookupError(failure instanceof Error ? failure.message : 'Saved translation could not be read.')
+        })
+        .finally(() => {
+          if (!cancelled && currentRequest === request) setCheckedKey(lookupKey)
+        })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
     return () => {
       cancelled = true
+      window.removeEventListener('focus', refresh)
     }
-  }, [loaded, language, book.id, source.id, selected.url, content, lookupKey, requestedVersion, selectionKey])
+  }, [loaded, language, book.id, source.id, selected.url, content, lookupKey])
   useEffect(() => {
     if (!loaded || !pendingJob) return
     let cancelled = false
@@ -246,7 +240,7 @@ export function SourceTranslationReader({
           const version = { id: saved.data.id, translation, key: JSON.stringify([source.id, selected.url, record.content_hash, pendingJob.language]), createdAt: saved.data.created_at, model: saved.data.model, inputTokens: saved.data.input_tokens, outputTokens: saved.data.output_tokens, termContext: saved.data.context }
           writeSetting(pendingKey, null)
           setPendingJob(null)
-          setVersions(previous => [version, ...previous.filter(entry => entry.id !== version.id)])
+          setVersions([version])
           setLanguage(pendingJob.language)
           setConfirm(false)
           setParameters({ translated: pendingJob.language, version: version.id }, { replace: true })
@@ -376,10 +370,7 @@ export function SourceTranslationReader({
         outputTokens: result.usage?.outputTokens ?? 0,
         termContext: result.context,
       }
-      setVersions((previous) => [
-        savedVersion,
-        ...previous.filter((version) => version.id !== savedVersion.id),
-      ])
+      setVersions([savedVersion])
       setConfirm(false)
       setParameters({ translated: language, version: savedVersion.id }, { replace: true })
     } catch (failure) {
@@ -393,7 +384,7 @@ export function SourceTranslationReader({
   const original = readableSourceChapter(content, record)
   const chapterTerms = saved ? chapterTermInventory(saved.translation, content.paragraphs.join('\n\n'), saved.termContext, language) : []
   const persistReading = async (position: number, fraction: number, observedAt: number, finished = false) => {
-    if (checking || lookupError) return
+    if (checking || lookupError || (translated && !saved)) return
     const reading = { sourceId: source.id, chapterUrl: listing[position].url, language: showingTranslation ? language : undefined, versionId: showingTranslation ? saved?.id : undefined }
     rememberSourceReading(book.id, { source: reading, chapter: position, fraction, observedAt, finished })
     if (showingTranslation) setTranslationPosition({ chapter_url: reading.chapterUrl, fraction, updated_at: new Date(observedAt).toISOString(), translation_version: reading.versionId ?? null })
@@ -420,7 +411,7 @@ export function SourceTranslationReader({
       wordCount: position === index ? readingContent.wordCount : 0,
     })),
     bookmarks: [],
-    progress: { chapter: index, offset: showingTranslation ? (translationPosition?.chapter_url === selected.url && translationPosition.translation_version === saved?.id ? translationPosition.fraction : 0) : originalPosition.fraction },
+    progress: { chapter: index, offset: showingTranslation ? (translationPosition?.chapter_url === selected.url ? translationPosition.fraction : 0) : originalPosition.fraction },
     lastReadAt: showingTranslation ? (translationPosition ? Date.parse(translationPosition.updated_at) : 0) : originalPosition.updatedAt,
     status: 'reading',
   }
@@ -475,7 +466,7 @@ export function SourceTranslationReader({
             `/read-source/${book.id}/${source.id}/${position}${translated ? `?translated=${language}` : ''}`
           }
           bookmarksEnabled={false}
-          trackingEnabled={!checking && !lookupError}
+          trackingEnabled={!checking && !lookupError && (!translated || Boolean(saved))}
           chatContext={{ bookId: book.id, sourceId: source.id, sourceKey: selected.url, versionId: showingTranslation ? saved?.id : undefined }}
           chapterActions={actions}
           onSuggestTerm={(text) => {
@@ -496,7 +487,7 @@ export function SourceTranslationReader({
               {saved && (
                 <button
                   className="button"
-                  title="Create a new translation version without overwriting earlier versions."
+                  title="Replace the saved translation after the new result is complete."
                   disabled={busy || checking}
                   onClick={() => {
                     close()
@@ -508,29 +499,6 @@ export function SourceTranslationReader({
                 </button>
               )}
               {saved && <button className="button" onClick={() => { close(); setTermQuery(''); setTermsOpen(true) }}><List size={16} />Chapter terms ({chapterTerms.length})</button>}
-              {matchingVersions.length > 1 && (
-                <label>
-                  Saved version
-                  <select
-                    aria-label="Translation version"
-                    value={saved?.id ?? ''}
-                    onChange={(event) => {
-                      setParameters(
-                        { translated: language, version: event.target.value },
-                        { replace: true },
-                      )
-                      close()
-                    }}
-                  >
-                    {matchingVersions.map((version, position) => (
-                      <option key={version.id} value={version.id}>
-                        {position === 0 ? 'Latest' : `Previous ${position}`} /{' '}
-                        {new Date(version.createdAt).toLocaleString()}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
               <Link to={`/books/${book.id}/translation?tab=style&chapter=${index}`}>Style guide</Link>
               <button
                 className="button"
@@ -627,7 +595,7 @@ export function SourceTranslationReader({
             setTermSelection(null)
             setInputBudget(null)
             if (edited) {
-              setVersions((previous) => [
+              setVersions([
                 {
                   id: edited.previewId,
                   translation: edited.translation,
@@ -638,10 +606,9 @@ export function SourceTranslationReader({
                   outputTokens: 0,
                   termContext: saved?.termContext,
                 },
-                ...previous,
               ])
               setParameters({ translated: language, version: edited.previewId }, { replace: true })
-              notify('Term updated. The earlier translation version is kept.')
+              notify('Term updated in the current translation.')
             } else notify('Preferred term saved. Retranslate to apply it to this chapter.')
           }}
         />
@@ -722,7 +689,7 @@ export function SourceTranslationReader({
             )}
             <p>
               One billable translation request{inputBudget ? ` using ${inputBudget.model}` : ''}.
-              Original text{retranslate ? ' and earlier translations are' : ' is'} kept.
+              {' '}Original text is kept.{retranslate && ' The current translation is replaced only after the new result is saved.'}
             </p>
             <div className="translation-budget">
               <button className="button" disabled={busy} onClick={() => void previewContext()}>
@@ -746,7 +713,7 @@ export function SourceTranslationReader({
               )}
               {saved && (
                 <p>
-                  Saved version: {saved.model || 'Unknown model'} /{' '}
+                  Current translation: {saved.model || 'Unknown model'} /{' '}
                   {saved.inputTokens.toLocaleString()} input / {saved.outputTokens.toLocaleString()}{' '}
                   output tokens
                 </p>
@@ -771,7 +738,7 @@ export function SourceTranslationReader({
             >
               {busy ? <LoaderCircle className="spin" size={16} /> : <Languages size={16} />}
               {retranslate
-                ? 'Retranslate & save new version'
+                ? 'Retranslate & replace'
                 : saved
                   ? 'Read saved translation'
                   : 'Translate & read'}

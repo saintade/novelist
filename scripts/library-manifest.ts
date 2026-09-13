@@ -42,6 +42,10 @@ export async function createLibraryManifest(
   database: Client,
   storage: SupabaseClient,
   ownerId: string,
+  capture?: {
+    rows?: (table: string, values: string[]) => Promise<void>
+    object?: (path: string, bytes: Buffer) => Promise<void>
+  },
 ) {
   z.string().uuid().parse(ownerId)
   const tables: Record<string, z.infer<typeof tableManifest>> = {}
@@ -85,6 +89,7 @@ export async function createLibraryManifest(
         const page = await database.query<{ body: string; identity: string }>(
           'fetch forward 200 from manifest_rows',
         )
+        await capture?.rows?.(table.name, page.rows.map(row => row.body))
         for (const row of page.rows) {
           count += 1
           ids.update(row.identity + '\n')
@@ -115,6 +120,7 @@ export async function createLibraryManifest(
           throw new Error(
             `Stored size changed for ${object.name}; create a new consistent snapshot.`,
           )
+        await capture?.object?.(object.name, bytes)
         objects.push({
           path: object.name,
           bytes: bytes.length,

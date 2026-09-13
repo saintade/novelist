@@ -37,6 +37,8 @@ import type { ReaderChatContext } from '../lib/reader/chat'
 import { ReaderChat } from './reader/ReaderChat'
 import '../styles/reader.css'
 
+const readerChatEnabled = false
+
 interface ReaderProps {
   book: LibraryBook
   theme: 'light' | 'dark'
@@ -300,7 +302,7 @@ export function Reader({
           <small>{book.author}</small>
         </div>
         <div className="reader-tools">
-          <IconButton label="Ask about chapter" disabled={!chapter || !ready || !trackingEnabled} onClick={() => setPanel('chat')}><MessageSquare size={19} /></IconButton>
+          {readerChatEnabled && <IconButton label="Ask about chapter" disabled={!chapter || !ready || !trackingEnabled} onClick={() => setPanel('chat')}><MessageSquare size={19} /></IconButton>}
           <IconButton
             label="Find in chapter"
             aria-pressed={finder}
@@ -532,7 +534,7 @@ export function Reader({
           </>}
         />
       )}
-      {panel === 'chat' && chapter && <ReaderChat context={chatContext ?? { bookId: book.id, sourceKey: `local:${index}` }} chapterTitle={chapter.title} onClose={() => setPanel(null)} />}
+      {readerChatEnabled && panel === 'chat' && chapter && <ReaderChat context={chatContext ?? { bookId: book.id, sourceKey: `local:${index}` }} chapterTitle={chapter.title} onClose={() => setPanel(null)} />}
     </div>
   )
 }

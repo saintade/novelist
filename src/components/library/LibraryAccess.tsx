@@ -16,8 +16,7 @@ export function LibraryAccess({
   const [verifiedOwner, setVerifiedOwner] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [code, setCode] = useState('')
-  const [emailCode, setEmailCode] = useState(false)
+  const [passwordSignIn, setPasswordSignIn] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -26,12 +25,17 @@ export function LibraryAccess({
     if (!privateAccess) return
     let cancelled = false
     let receivedAuthEvent = false
-    void supabase.auth
-      .getSession()
-      .then((result) => {
+    const callback = new URL(window.location.href)
+    const fragment = new URLSearchParams(callback.hash.slice(1))
+    const hasEmailCallback = ['code', 'error', 'error_code', 'access_token'].some(key => callback.searchParams.has(key) || fragment.has(key))
+    void supabase.auth.initialize()
+      .then(async (initialization) => {
+        const result = await supabase.auth.getSession()
         if (!cancelled && !receivedAuthEvent) {
           setSession(result.data.session)
-          if (result.error) setError(result.error.message)
+          if (!result.data.session && (initialization.error || hasEmailCallback))
+            setError('This email link could not complete sign-in. Request a new link in the browser you are using now, then open the newest email in that same browser. No email code or password is needed.')
+          else if (result.error) setError(result.error.message)
         }
       })
       .catch(() => {
@@ -41,17 +45,16 @@ export function LibraryAccess({
         }
       })
     const { data } = supabase.auth.onAuthStateChange((event, current) => {
-      receivedAuthEvent = true
-      if (cancelled) return
+      if (cancelled || (event === 'INITIAL_SESSION' && receivedAuthEvent)) return
+      if (event !== 'INITIAL_SESSION') receivedAuthEvent = true
       setSession(current)
-      setError('')
+      if (event !== 'INITIAL_SESSION') setError('')
       setVerifiedOwner((previous) =>
         event === 'SIGNED_OUT' || current?.user.id !== previous ? '' : previous,
       )
       if (event === 'SIGNED_OUT' || event === 'SIGNED_IN') {
         setPassword('')
-        setCode('')
-        setEmailCode(false)
+        setPasswordSignIn(false)
         setEmailSent(false)
       }
     })
@@ -132,15 +135,21 @@ export function LibraryAccess({
           className="edit-form"
           onSubmit={(event) => {
             event.preventDefault()
-            void run(() =>
-              emailCode
-                ? supabase.auth.verifyOtp({
-                    email: email.trim(),
-                    token: code.trim(),
-                    type: 'email',
-                  })
-                : supabase.auth.signInWithPassword({ email: email.trim(), password }),
-            )
+            void run(async () => {
+              if (passwordSignIn) return supabase.auth.signInWithPassword({ email: email.trim(), password })
+              let result = await supabase.auth.signInWithOtp({
+                email: email.trim(),
+                options: { shouldCreateUser: false, emailRedirectTo: window.location.origin },
+              })
+              if (result.error?.code === 'signup_disabled')
+                result = await supabase.auth.resend({
+                  type: 'signup',
+                  email: email.trim(),
+                  options: { emailRedirectTo: window.location.origin },
+                })
+              if (!result.error) setEmailSent(true)
+              return result
+            })
           }}
         >
           <label>
@@ -154,19 +163,7 @@ export function LibraryAccess({
               onChange={(event) => setEmail(event.target.value)}
             />
           </label>
-          {emailCode ? (
-            <label>
-              Email code
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                disabled={busy}
-              />
-            </label>
-          ) : (
+          {passwordSignIn && (
             <label>
               Password
               <input
@@ -180,38 +177,24 @@ export function LibraryAccess({
             </label>
           )}
           <button className="button primary" disabled={busy}>
-            {busy ? <LoaderCircle size={16} className="spin" /> : <KeyRound size={16} />}Sign in
+            {busy ? <LoaderCircle size={16} className="spin" /> : passwordSignIn ? <KeyRound size={16} /> : <Mail size={16} />}
+            {passwordSignIn ? 'Sign in' : 'Email sign-in link'}
           </button>
           <button
             type="button"
             className="button subtle"
-            disabled={busy || !email.trim()}
-            onClick={() =>
-              void run(async () => {
-                if (emailCode) {
-                  setEmailCode(false)
-                  return { error: null }
-                }
-                const result = await supabase.auth.signInWithOtp({
-                  email: email.trim(),
-                  options: { shouldCreateUser: false, emailRedirectTo: window.location.origin },
-                })
-                if (!result.error) setEmailSent(true)
-                return result
-              })
-            }
+            disabled={busy}
+            onClick={() => {
+              setPasswordSignIn(previous => !previous)
+              setPassword('')
+              setEmailSent(false)
+              setError('')
+            }}
           >
-            <Mail size={16} />
-            {emailCode ? 'Use password' : 'Email sign-in link'}
+            {passwordSignIn ? <Mail size={16} /> : <KeyRound size={16} />}
+            {passwordSignIn ? 'Use email link' : 'Use password'}
           </button>
-          {emailSent && !emailCode && (
-            <>
-              <p role="status">Sign-in email sent.</p>
-              <button type="button" className="button subtle" disabled={busy} onClick={() => setEmailCode(true)}>
-                <KeyRound size={16} />Enter email code
-              </button>
-            </>
-          )}
+          {emailSent && <p role="status">Sign-in email sent.</p>}
         </form>
       )}
       {error && (
@@ -369,7 +352,7 @@ export function LibraryAccount({ onClose }: { onClose: () => void }) {
             New password
             <input
               type="password"
-              minLength={12}
+              minLength={8}
               autoComplete="new-password"
               required
               value={password}

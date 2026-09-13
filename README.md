@@ -44,7 +44,7 @@ volume deletion are destructive. Do not expose the local API, database, or Studi
 - Independent source books with source-host labels, folders, optional context books, selected
   language-pair glossaries and evolving style guides. No chapter-pairing workflow is required.
 - Preview or translate title/synopsis, explicitly apply metadata, and translate source chapters
-  into immutable versions with clickable noun review and contextual AI term suggestions.
+  into one current translation per chapter/language, with clickable noun review and contextual AI term suggestions.
 - A plain top-right settings button with Light/Dark choices and reading preferences.
 
 ## Storage and Privacy
@@ -129,14 +129,17 @@ to that phone, not this development machine. Phone layouts are browser-emulation
 not tested on physical devices.
 
 Supabase Cloud plus a Render Free Node service is the selected private hosting setup. The
-production server, permanent sign-in and restrictive owner policies are implemented. The hosted
-schema is deployed and the preserved owner account awaits email verification; library-data transfer,
-GitHub push and Render deployment are still pending. `npm run build && npm start` serves the
+hosted owner is email-verified and restricted to the preserved UUID. The migrated library contains
+3 books,165 current chapter translations and876 private original files; all30 owner-table
+fingerprints and file hashes matched. GitHub push and Render deployment are still pending.
+`npm run build && npm start` serves the
 app and API with production configuration. Static hosting alone cannot run the worker. See
 [note.txt](note.txt) for exact Render settings and the [deployment guide](docs/deployment.md) for
 owner-preserving migration. Free Render can sleep or restart; saved jobs/results remain in Supabase.
-Private sign-in supports Supabase's built-in email links with same-origin callbacks, plus passwords
-and optional email-code entry. Code-only email templates are not required for Free-tier deployment.
+Private sign-in defaults to email links, with separate password mode and visible callback errors.
+The link must open in the same browser/profile that requested it; VS Code is separate from Chrome.
+There is no code-entry step for the default email template. `npm run account:password -- --help`
+describes hidden-input password setup for the verified owner; no password is included in this repo.
 
 Imports support unencrypted reflowable EPUBs and plain text, up to 50 MB per file. Complex
 fixed layouts, DRM, PDF, and cross-chapter EPUB footnote navigation are not supported.
@@ -258,15 +261,20 @@ original is authoritative; neither prior translations nor the style guide can in
 The Translate side reuses a saved result for the source, content hash and language, including after
 reload. **Original** switches back. Previous/Next are above and below the chapter text. If the next chapter is
 untranslated, its original text stays visible instead of a blank page; navigation never starts AI.
-Contents is on the left of the bottom toolbar, Settings alone on the right, and chat/Search at the top.
+Contents is on the left of the bottom toolbar, Settings alone on the right, and Search at the top.
+Chat is disabled in the reader; existing conversations and backend code have not been deleted.
 Light/dark is inside Settings. The visible scrollbar is hidden only while reading; normal scrolling
 continues. Contents opens on the active chapter's page and centers its row, without moving the text
 underneath. Original and translated chapter/language/version/scroll positions are persisted separately.
 Continue uses the newest reading activity; old delayed saves cannot rewind it.
 
-Reading settings contains **Retranslate chapter**, **Chapter terms**, guide/settings links and version history.
-Retranslation creates a new version. The latest 20 matching versions are selectable; older rows are
-retained. Paragraph breaks, margins and deliberate line breaks are preserved. Collapsing a
+The book's **Translated** tab lists current saved titles and opens translated text directly, retaining
+original chapter positions even when translations have gaps. Reading settings contains
+**Retranslate chapter**, **Chapter terms** and guide/settings links. One current translation is stored
+per chapter/language. A complete retranslation or term edit atomically replaces it; a failed save
+leaves the current text intact. Old reading links open the current result. Prior duplicates were
+consolidated only after a verified private backup, preserving latest text and progress references.
+Paragraph breaks, margins and deliberate line breaks are preserved. Collapsing a
 multi-paragraph source into one paragraph is rejected before saving.
 
 Names and specialist terms are underlined in both modes when a saved mapping exists. Matching handles
@@ -275,7 +283,7 @@ Shared English labels open a source-mapping review instead of guessing. **Chapte
 established mappings, new candidates, different renderings, missing target spellings and rejected
 term-evidence warnings. Saved glossary context can supply mappings the model did not repeat.
 
-Click an unambiguous term to save a corrected version and approved glossary preference atomically,
+Click an unambiguous term to update the current translation and approved glossary preference atomically,
 without a model call. English inflections are preserved. Highlight other text to save a preference.
 **Suggest with AI** is a separate explicit billable action: it sends the full current original,
 selected translation when available, exact/alias/similar glossary choices from allowed sources,
@@ -334,7 +342,7 @@ Download admission is separate from AI request slots; cached extractor checks co
   retained even when downloads have gaps. Manual ranges still require all selected originals.
   **Chapters per request (maximum)** defaults to10 and accepts1-10. The cost review lists downloaded
   chapters and exclusions; changes to the selected count require a fresh review.
-3. Review the model/language, existing versions, missing downloads, request count and cost estimate.
+3. Review the model/language, saved translations, missing downloads, request count and cost estimate.
    Confirm billable usage, then choose **Start translations**. Merely opening/reviewing makes no
    model request. The estimate includes selected chapters before skips; actual cost can be lower.
 4. Track saved/skipped/remaining chapters in the queue. **Pause translations** finishes the current
@@ -342,7 +350,7 @@ Download admission is separate from AI request slots; cached extractor checks co
   Transient model failures and incomplete results retry automatically with backoff; already saved
   chapters are kept. Quota/access/source/preference errors and exhausted attempts stop the job.
 5. **Cancel queue** cancels the remaining chapters after the current request. Originals, reading
-   position, earlier versions and completed translations are kept. Saved rows have **Read** links.
+  position and current completed translations are kept. Saved rows have **Read** links.
 
 Groups shrink to fit source lengths, output headroom and the total context budget. Luna's grouped
 application output ceiling is65,536 tokens, GPT-4.1's32,768 and GPT-4o mini's16,384. Unknown models
@@ -352,7 +360,7 @@ still clamped for known models. Ten is a maximum, not a promise for each request
 Each group shares its first chapter's recent/reference/style context and uses per-chapter approved
 glossaries. New translations and opt-in guide updates affect the next request. A10-chapter group
 can pass the default5-chapter guide cadence before updating. Choose1 for per-chapter continuity.
-Exact source/hash/language checks skip valid saved versions. Retranslate creates a new version.
+Exact source/hash/language checks skip valid saved translations. Retranslate replaces the current result only after a successful save.
 
 Strict grouped output carries source keys, hashes, ordered paragraph IDs and a completion marker.
 At an output-token limit, fully closed chapter objects can be independently validated and saved.
@@ -415,8 +423,8 @@ Local APIs use the Vite plugin; hosted APIs use the standalone Node server.
 The [consolidated project plan](docs/translation-plan.md) records the reader and UI decisions,
 data model, and complete roadmap. A bounded scraper-code generation, test, and repair harness is
 now implemented, along with per-book reference retrieval and single-chapter drafts. Live translation
-quality evaluation, whole-book translated exports, large-corpus retrieval and the actual hosted
-restore remain pending. Durable jobs and private hosting code are implemented. OpenAI remains the
+quality evaluation, whole-book translated exports and large-corpus retrieval remain pending.
+The hosted restore is complete; public frontend deployment remains pending. Durable jobs and private hosting code are implemented. OpenAI remains the
 initial translation provider; Qwen comparisons are experimental.
 
 ## Admin and Storage

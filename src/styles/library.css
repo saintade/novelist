@@ -1903,6 +1903,18 @@ body:has(.reader) .toast {
   .filter-tabs > button > span {
     display: none;
   }
+  .contents-section > .filter-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 12px;
+    row-gap: 0;
+  }
+  .contents-section > .filter-tabs > button {
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .collection-top {
     gap: 7px;
   }

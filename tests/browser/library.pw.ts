@@ -134,7 +134,7 @@ test('translated reading resumes the latest chapter, version and position after 
   await expect(page.getByRole('button', { name: 'Translate', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.reader-footer')).not.toContainText('%')
   await expect(page.locator('.reader-footer .reader-location')).toHaveText('')
-  await expect(page.locator('.reader-tools').getByRole('button', { name: 'Ask about chapter', exact: true })).toBeVisible()
+  await expect(page.locator('.reader-tools').getByRole('button', { name: 'Ask about chapter', exact: true })).toHaveCount(0)
   await expect(page.locator('html')).toHaveCSS('scrollbar-width', 'none')
   await expect(page.locator('.reader-footer-tools').getByRole('button')).toHaveCount(1)
   await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
@@ -470,7 +470,7 @@ test('bulk translation confirms costs, skips saved chapters and resumes a persis
     if (preferences.error) throw new Error(preferences.error.message)
     const existing = await supabase.from('book_translation_previews').insert({ book_id: bookId, kind: 'chapter', source_key: `${sourceUrl}/1`, target_language: 'en', model: 'gpt-4.1-mini', input_tokens: 1000, output_tokens: 200, result: { title: 'Chapter 1', paragraphs: ['Existing first translation.'], terminology: [] }, context: { targetLanguage: 'en', source: { key: `${sourceUrl}/1`, sourceId: source.id, language: 'zh', text: 'Original chapter 1.', hash: hashes[0] }, timings: { preparationMs: 100, guideMs: 0, modelMs: 1900 } } }).select('*').single()
     if (existing.error) throw new Error(existing.error.message)
-    const manual = await supabase.from('book_translation_previews').insert({ book_id: bookId, kind: 'chapter', source_key: `${sourceUrl}/1`, target_language: 'en', model: 'manual edit', result: existing.data.result, context: { ...existing.data.context, manualEdit: { parentVersion: existing.data.id } } }).select('id').single()
+    const manual = await supabase.from('book_translation_previews').update({ id: crypto.randomUUID(), model: 'manual edit', result: existing.data.result, context: { ...existing.data.context, manualEdit: { parentVersion: existing.data.id } } }).eq('id', existing.data.id).select('id').single()
     if (manual.error) throw new Error(manual.error.message)
     return { bookId, sourceId: source.id, sourceUrl, hashes, previewId: manual.data.id, workerId: crypto.randomUUID() }
   })
@@ -589,8 +589,8 @@ test('bulk translation confirms costs, skips saved chapters and resumes a persis
   await expect(queue.getByRole('link', { name: 'Read', exact: true }).first()).toHaveAttribute('href', `/read-source/${fixture.bookId}/${fixture.sourceId}/1?translated=en&version=${fixture.previewId}`)
   await page.goto(`/books/${fixture.bookId}/translation?tab=settings`)
   const models = page.getByRole('region', { name: 'Reader models', exact: true })
-  await expect(models).toContainText('3 measured translations')
-  await expect(models).toContainText('3.0s average per chapter')
+  await expect(models).toContainText('2 measured translations')
+  await expect(models).toContainText('3.5s average per chapter')
   await expect(models.locator('.translation-timings > li')).toHaveCount(1)
 })
 
@@ -668,60 +668,30 @@ test('glossary source selection shows language pairs and reuses only the chosen 
   await expectNoOverflow(page)
 })
 
-test('reader chat keeps cited conversations and scroll position without sending on open', async ({ page }, testInfo) => {
+test('reader chat is disabled and has no visible entry point', async ({ page }, testInfo) => {
   await page.goto('/')
   await expect(page.locator('.book-tile')).toHaveCount(4, { timeout: 45000 })
   await page.locator('.tile-title').filter({ hasText: "Alice's Adventures in Wonderland" }).click()
-  const bookId = page.url().split('/books/')[1]
+  let requests = 0
+  await page.route('**/api/ai/reader-chat', route => {
+    requests++
+    return route.abort()
+  })
   await page.getByRole('link', { name: 'Start reading', exact: true }).click()
   await expect(page.locator('.chapter-body')).toBeVisible()
-  await page.route('**/api/ai/status', route => route.fulfill({ json: { liveEnabled: true, model: 'test-only', chatModel: 'test-only' } }))
-  let requests = 0
-  await page.route('**/api/ai/reader-chat', async route => {
-    requests++
-    const input = route.request().postDataJSON()
-    expect(input.confirmed).toBe(true)
-    expect(input.scope).toBe('retrieval')
-    const turn = await page.evaluate(async input => {
-      const clientPath = '/src/lib/supabase/client.ts'
-      const { supabase } = await import(clientPath)
-      const result = await supabase.from('reader_chat_turns').insert({ id: input.requestId, book_id: input.bookId, source_key: input.sourceKey, chapter_position: 0, scope: input.scope, question: input.question, answer: '**Alice** is curious about what she sees.\n\nThe answer stays within the current chapter.', status: 'completed', model: 'test-only', citations: [{ sourceId: 'original', sourceKey: 'local:0', title: 'Down the Rabbit-Hole', quote: 'Alice' }] }).select('*').single()
-      if (result.error) throw new Error(result.error.message)
-      return result.data
-    }, input)
-    await route.fulfill({ json: turn })
-  })
   await expect(page.locator('.reader')).toHaveAttribute('data-reading-ready', 'true')
-  await page.evaluate(() => scrollTo(0, (document.documentElement.scrollHeight - innerHeight) * 0.4))
-  await page.getByRole('button', { name: 'Ask about chapter', exact: true }).click()
-  const chat = page.getByRole('dialog', { name: 'Reading chat', exact: true })
-  await expect(chat).toBeVisible()
-  await expect(chat.getByRole('button', { name: 'This chapter', exact: true })).toHaveCount(0)
-  await expect(chat.getByRole('button', { name: 'Recent chapters', exact: true })).toHaveCount(0)
-  await expect(chat.locator('.chat-index-status')).toContainText('1 chapter searchable')
+  await expect(page.getByRole('button', { name: 'Ask about chapter', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Reading chat', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Ask about chapter', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Close reading settings', exact: true }).click()
   expect(requests).toBe(0)
-  await chat.getByRole('textbox', { name: 'Ask about this chapter', exact: true }).fill('Why is Alice curious?')
-  await chat.getByRole('button', { name: 'Send question', exact: true }).click()
-  await expect(chat.locator('.chat-answer strong')).toHaveText('Alice')
-  await expect(chat.locator('.chat-citation')).toContainText('Down the Rabbit-Hole')
-  expect(requests).toBe(1)
   await expectNoOverflow(page)
-  await page.screenshot({ path: testInfo.outputPath('reading-chat.png') })
-  await chat.getByRole('button', { name: 'Close reading chat', exact: true }).click()
+  await page.screenshot({ path: testInfo.outputPath('reader-chat-disabled.png') })
   await page.reload()
   await expect(page.locator('.chapter-body')).toBeVisible()
-  await expect.poll(() => page.evaluate(() => scrollY / (document.documentElement.scrollHeight - innerHeight))).toBeGreaterThan(0.35)
-  await page.getByRole('button', { name: 'Ask about chapter', exact: true }).click()
-  await expect(chat.locator('.chat-answer strong')).toHaveText('Alice')
-  expect(requests).toBe(1)
-  await chat.getByRole('button', { name: 'Clear chapter conversation', exact: true }).click()
-  await chat.getByRole('button', { name: 'Clear conversation', exact: true }).click()
-  await expect(chat).toContainText('No questions yet.')
-  expect((await page.evaluate(async bookId => {
-    const clientPath = '/src/lib/supabase/client.ts'
-    const { supabase } = await import(clientPath)
-    return (await supabase.from('reader_chat_turns').select('id').eq('book_id', bookId)).data
-  }, bookId))).toEqual([])
+  await expect(page.getByRole('button', { name: 'Ask about chapter', exact: true })).toHaveCount(0)
+  expect(requests).toBe(0)
 })
 
 test('library folders group books, persist moves and never delete their contents', async ({
@@ -1279,7 +1249,7 @@ test('independent source books support reading, context translation and catalog 
   await expect(
     page.locator('.reader-footer').getByRole('button', { name: 'Translate', exact: true }),
   ).toBeVisible()
-  await expect(page.locator('.reader-tools button')).toHaveCount(2)
+  await expect(page.locator('.reader-tools button')).toHaveCount(1)
   await page.evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({
     path: testInfo.outputPath('saved-translation-guide.png'),
@@ -1506,19 +1476,29 @@ test('independent source books support reading, context translation and catalog 
   await expect(page.getByText(/AI translation \/ en/)).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Source link', exact: true })).toHaveCount(0)
   const firstVersion = new URL(page.url()).searchParams.get('version')!
+  await page.goto(`/books/${saved.bookId}?tab=translated`)
+  await expect(page.getByRole('tab', { name: /^Translated(?: 2)?$/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.chapter-list-item')).toHaveCount(2)
+  const translatedChapter = page.locator('.chapter-list-item').filter({ hasText: 'Chapter 2 translated' })
+  await expect(translatedChapter).toHaveAttribute('href', `/read-source/${saved.bookId}/${saved.sourceId}/1?translated=en`)
+  await expectNoOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('translated-chapter-list.png'), fullPage: true, animations: 'disabled' })
+  await translatedChapter.click()
+  await expect(page.locator('.chapter-body')).toContainText('The continuation is ready to read.')
+  expect(paidTranslationRequests).toBe(2)
   await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
   await page.getByRole('button', { name: 'Retranslate chapter', exact: true }).click()
   const retranslation = page.getByRole('dialog', { name: 'Retranslate chapter', exact: true })
   await expect(retranslation.locator('.translation-budget')).toContainText('estimated input tokens')
   expect(paidTranslationRequests).toBe(2)
   await retranslation
-    .getByRole('button', { name: 'Retranslate & save new version', exact: true })
+    .getByRole('button', { name: 'Retranslate & replace', exact: true })
     .click()
   await expect(page.locator('.chapter-body')).toContainText('A revised continuation is ready.')
   expect(paidTranslationRequests).toBe(3)
   await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
   const versionPicker = page.getByRole('combobox', { name: 'Translation version', exact: true })
-  await expect(versionPicker.locator('option')).toHaveCount(2)
+  await expect(versionPicker).toHaveCount(0)
   await expect(page.locator('.chapter-body > p').last()).toHaveCSS('white-space', 'pre-wrap')
   expect(
     await page
@@ -1526,12 +1506,13 @@ test('independent source books support reading, context translation and catalog 
       .first()
       .evaluate((paragraph) => parseFloat(getComputedStyle(paragraph).marginBottom)),
   ).toBeGreaterThan(0)
-  await versionPicker.selectOption(firstVersion)
-  await expect(page.locator('.chapter-body')).toContainText('The continuation is ready to read.')
+  await page.getByRole('button', { name: 'Close reading settings', exact: true }).click()
+  await page.goto(`/read-source/${saved.bookId}/${saved.sourceId}/1?translated=en&version=${firstVersion}`)
+  await expect(page.locator('.chapter-body')).toContainText('A revised continuation is ready.')
   await page.reload()
-  await expect(page.locator('.chapter-body')).toContainText('The continuation is ready to read.')
+  await expect(page.locator('.chapter-body')).toContainText('A revised continuation is ready.')
   await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
-  await expect(versionPicker.locator('option')).toHaveCount(2)
+  await expect(versionPicker).toHaveCount(0)
   await page.getByRole('button', { name: 'Close reading settings', exact: true }).click()
   expect(paidTranslationRequests).toBe(3)
   await expectNoOverflow(page)
@@ -1631,8 +1612,8 @@ test('independent source books support reading, context translation and catalog 
   await expect(page.locator('.chapter-body')).toContainText('Qinglan Crossing Revised')
   await page.getByRole('button', { name: 'Reading settings', exact: true }).click()
   await expect(
-    page.getByRole('combobox', { name: 'Translation version', exact: true }).locator('option'),
-  ).toHaveCount(2)
+    page.getByRole('combobox', { name: 'Translation version', exact: true }),
+  ).toHaveCount(0)
   await page.getByRole('button', { name: 'Close reading settings', exact: true }).click()
   await page.getByRole('link', { name: 'Back to book details', exact: true }).click()
   await page.getByRole('tab', { name: 'Downloads', exact: true }).click()
@@ -2389,7 +2370,7 @@ test('reader preserves chapters, bookmarks, appearance and reading position', as
   await expect(
     page.locator('.reader-footer').getByRole('button', { name: 'Next chapter', exact: true }),
   ).toHaveCount(0)
-  await expect(page.locator('.reader-tools button')).toHaveCount(2)
+  await expect(page.locator('.reader-tools button')).toHaveCount(1)
   await page.screenshot({ path: testInfo.outputPath('reader-dark.png') })
   await expectNoOverflow(page)
 

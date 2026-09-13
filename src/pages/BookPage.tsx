@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -24,6 +24,7 @@ import { DownloadRange } from '../components/library/SourceControls'
 import { TranslationRange } from '../components/library/TranslationRange'
 import { useSourceDirectory } from '../lib/sources/use-source-directory'
 import { sourceInventory } from '../lib/sources/repository'
+import { supabase } from '../lib/supabase/client'
 import { NotFound } from './NotFoundPage'
 
 export function BookDetails() {
@@ -33,17 +34,59 @@ export function BookDetails() {
   const directory = useSourceDirectory(book)
   const [parameters, setParameters] = useSearchParams()
   const tab = parameters.get('tab') ?? 'chapters'
-  const setTab = (value: string) => setParameters(previous => {
-    const next = new URLSearchParams(previous)
-    next.set('tab', value)
-    return next
-  })
+  const setTab = (value: string) => {
+    setParameters(previous => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', value)
+      return next
+    })
+    setPage(0)
+  }
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
-  if (!book) return <NotFound />
   const selectedSource = directory.sources.find(
-    (source) => source.book_id === book.id && source.role !== 'metadata',
+    (source) => source.book_id === book?.id && source.role !== 'metadata',
   )
+  const sourceId = selectedSource?.id
+  const ownerId = book?.ownerId
+  const translationTabOpen = tab === 'translated'
+  const translationKey = JSON.stringify([ownerId, bookId, sourceId])
+  const [translationDirectory, setTranslationDirectory] = useState({ key: '', language: 'en', titles: new Map<string, string>() })
+  const [translationError, setTranslationError] = useState('')
+  const translations = translationDirectory.key === translationKey ? translationDirectory.titles : new Map<string, string>()
+  useEffect(() => {
+    if (!bookId || !sourceId || !ownerId) return
+    let cancelled = false
+    let revision = 0
+    const read = async () => {
+      const requestRevision = ++revision
+      setTranslationError('')
+      const preferences = await supabase.from('book_translation_settings').select('target_language').eq('book_id', bookId).maybeSingle()
+      if (preferences.error) throw new Error(preferences.error.message)
+      const language = preferences.data?.target_language ?? 'en'
+      const titles = new Map<string, string>()
+      for (let offset = 0; ; offset += 1000) {
+        const result = await supabase.from('book_translation_previews')
+          .select('source_key,title:result->>title')
+          .eq('owner_id', ownerId).eq('book_id', bookId).eq('kind', 'chapter')
+          .eq('target_language', language).eq('context->source->>sourceId', sourceId)
+          .order('created_at', { ascending: false }).order('id', { ascending: false })
+          .range(offset, offset + 999)
+        if (result.error) throw new Error(result.error.message)
+        for (const row of result.data)
+          if (row.source_key && !titles.has(row.source_key)) titles.set(row.source_key, typeof row.title === 'string' ? row.title : '')
+        if (result.data.length < 1000) break
+      }
+      if (!cancelled && requestRevision === revision) setTranslationDirectory({ key: translationKey, language, titles })
+    }
+    const refresh = () => void read().catch(failure => {
+      if (!cancelled) setTranslationError(failure instanceof Error ? failure.message : 'Saved translations could not be loaded.')
+    })
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => { cancelled = true; window.removeEventListener('focus', refresh) }
+  }, [bookId, sourceId, ownerId, translationKey, translationTabOpen])
+  if (!book) return <NotFound />
   const webSource = book.format === 'WEB'
   const inventory = selectedSource ? sourceInventory(selectedSource) : []
   const downloaded = directory.downloaded.filter(
@@ -60,13 +103,14 @@ export function BookDetails() {
   const chapterEntries = webSource
     ? inventory.map((entry) => ({
         id: entry.url,
-        title: entry.title,
+        title: (translationTabOpen ? translations.get(entry.url) : undefined) || entry.title,
         wordCount: 0,
         url: entry.url,
       }))
     : book.chapters.map((entry) => ({ ...entry, url: undefined }))
   const chapters = chapterEntries
     .map((entry, index) => ({ ...entry, index }))
+    .filter((entry) => !translationTabOpen || (entry.url && translations.has(entry.url)))
     .filter((entry) =>
       `${entry.index + 1} ${entry.title}`.toLowerCase().includes(query.toLowerCase()),
     )
@@ -104,6 +148,7 @@ export function BookDetails() {
             {webSource ? (
               <span>
                 {downloaded.length} of {inventory.length} chapters downloaded
+                {translations.size > 0 && ` / ${translations.size} translated`}
               </span>
             ) : (
               <>
@@ -163,10 +208,12 @@ export function BookDetails() {
             {directory.error}
           </p>
         )}
+        {translationError && <p role="alert" className="form-error">{translationError}</p>}
         <div className="filter-tabs" role="tablist" aria-label="Book information">
           <button role="tab" aria-selected={tab === 'chapters'} onClick={() => setTab('chapters')}>
             {webSource ? 'Contents' : 'Chapters'} <span>{chapterEntries.length}</span>
           </button>
+          {webSource && <button role="tab" aria-selected={translationTabOpen} onClick={() => setTab('translated')}>Translated <span>{translations.size}</span></button>}
           <button id="book-tab-downloads" role="tab" aria-controls="book-downloads" aria-selected={tab === 'downloads'} onClick={() => setTab('downloads')}>
             Downloads
           </button>
@@ -192,7 +239,7 @@ export function BookDetails() {
           )}
         </div>
         {webSource && <div id="book-translate" role="tabpanel" aria-labelledby="book-tab-translate" hidden={tab !== 'translate'}><TranslationRange key={book.id} book={book} source={selectedSource} active={tab === 'translate'} /></div>}
-        {tab === 'chapters' ? (
+        {tab === 'chapters' || translationTabOpen ? (
           <>
             <div className="contents-toolbar">
               <label className="search-field">
@@ -208,7 +255,7 @@ export function BookDetails() {
                 />
               </label>
               <span>
-                {chapters.length} {webSource ? 'chapter links' : 'chapters'}
+                {chapters.length} {translationTabOpen ? 'translated chapters' : webSource ? 'chapter links' : 'chapters'}
               </span>
             </div>
             <div className="chapter-list">
@@ -217,7 +264,7 @@ export function BookDetails() {
                   key={chapter.id}
                   to={
                     webSource && selectedSource
-                      ? `/read-source/${book.id}/${selectedSource.id}/${chapter.index}`
+                      ? `/read-source/${book.id}/${selectedSource.id}/${chapter.index}${translationTabOpen ? `?translated=${encodeURIComponent(translationDirectory.language)}` : ''}`
                       : `/read/${book.id}/${chapter.index}`
                   }
                   className={`chapter-list-item ${(webSource ? (lastReading?.chapterUrl ?? sourceProgress?.chapter_url) === chapter.url : book.status === 'reading' && book.progress.chapter === chapter.index) ? 'active' : ''}`}
@@ -227,9 +274,10 @@ export function BookDetails() {
                     {webSource ? chapter.title : chapterTitle(chapter.title)}
                     {webSource && (
                       <small>
-                        {downloaded.some((entry) => entry.url === chapter.url)
+                        {translationTabOpen ? 'Translated' : downloaded.some((entry) => entry.url === chapter.url)
                           ? 'Downloaded'
                           : 'Download on open'}
+                        {!translationTabOpen && chapter.url && translations.has(chapter.url) && ' / Translation saved'}
                       </small>
                     )}
                     {(webSource
@@ -246,7 +294,7 @@ export function BookDetails() {
               ))}
               {!chapters.length && (
                 <div className="empty-inline">
-                  {webSource && !query ? 'No chapter links saved.' : 'No matching chapters.'}
+                  {translationTabOpen && !query ? 'No translated chapters saved.' : webSource && !query ? 'No chapter links saved.' : 'No matching chapters.'}
                 </div>
               )}
             </div>

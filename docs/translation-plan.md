@@ -1,6 +1,6 @@
 # Novelist Product and Engineering Plan
 
-Updated 2026-09-11. This is the consolidated plan for the reader, scraping, reference material,
+Updated 2026-09-12. This is the consolidated plan for the reader, scraping, reference material,
 translation, and deployment. UI baseline commit: `51c3f38`.
 
 ## Current Delivery
@@ -8,16 +8,19 @@ translation, and deployment. UI baseline commit: `51c3f38`.
 This section records the current implementation and supersedes older source-pairing descriptions
 below. The project evolved from multi-source novels into independent source books during this work.
 
-Verification on 2026-09-11: 169 backend/shared tests with local Supabase and Docker enabled,
+Verification on 2026-09-12: 177 backend/shared tests with local Supabase and Docker enabled,
 51 desktop/Android/iPhone browser workflows, and13 installed-extension workflows passed.
 Application and extension builds, lint, database lint and patch whitespace checks passed.
 The noun editor and reader screenshots were inspected on mobile. Model responses in tests were
 mocked; read-only audits of saved user translations made no paid calls. Adaptive regular-API groups,
 independent background reader jobs, bounded automatic retries, private hosting code, gzip files
-and usage administration are implemented. Supabase CLI is now linked,55 schema migrations are deployed,
-and the preserved hosted owner awaits email verification. Library-data/file migration, private GitHub
-push and Render deployment remain pending. The discounted provider Batch API is not implemented or
-live-provider evaluated. Built-in email-link login supports the Free project's default email provider.
+and usage administration are implemented. All56 schema migrations through044 and the owner-only
+hosted transfer are complete:3 books,165 current chapter translations and876 private original files,
+with exact row and file hashes verified. The owner is email-verified and restricted RLS is active.
+Private GitHub push and Render deployment remain pending. A hidden terminal command sets a password
+without another email link. Cross-browser PKCE failures are visible; default-template sign-in no
+longer requests a code. The discounted provider Batch API is not implemented or live-evaluated.
+The separate authorized live source audit used one paid extractor request, not translation calls.
 
 | Requested                            | Implemented                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -33,8 +36,8 @@ live-provider evaluated. Built-in email-link login supports the Free project's d
 | Rebuild extraction                   | Force regeneration bypasses cached code only with explicit model permission. Passing code replaces the cache; failed rebuilds preserve it. Direct tests use fetched chapter HTML and never overwrite downloaded text.                                                                                                                                                                                     |
 | One-click translation                | With saved preferences, Translate immediately translates, saves and opens the chapter. Original switches back; navigation alone does not call AI.                                                                                                                                                                                                                                                         |
 | Mass translation                     | Translate untranslated selects downloaded originals only across up to20,000 indexed chapters, keeps sparse original positions and excludes missing downloads; manual ranges up to1,000 remain strict. Reviewed count changes reject before starting. Adaptive groups of1-10, saved-version skips, independent reader jobs, three-attempt automatic retries and source/settings guards remain. Migration043 applied locally. |
-| Average timings                      | Per-model/language averages across all measured history, with sample count and preparation/guide/generation breakdown. Unmeasured records and manual edits excluded. Range estimates use up to100 recent measured samples for the selected model/language.                                                                                                                                                |
-| Retranslation/history                | Retranslate creates another saved version. Latest20 matching versions are selectable; old rows remain. Cached versions match source ID, URL, text hash and language.                                                                                                                                                                                                                                      |
+| Average timings                      | Per-model/language averages across measured current translations, with sample count and preparation/guide/generation breakdown. Unmeasured records and manual edits excluded. Historical billable activity remains in the separate usage ledger. Range estimates use up to100 measured samples. |
+| Current chapter translation          | Migration044 enforces one row per owner/book/chapter/language. Completed generation and term edits atomically replace it; invalid saves retain current text. Progress and queue references follow replacements, stale term edits reject, obsolete search documents invalidate, old URLs open current text. Prior rows are in a private pre-migration backup, not a reader history picker. |
 | Paragraph formatting                 | Separate paragraphs, blank-line normalization, margins and deliberate internal line breaks. Collapsed multi-paragraph responses are rejected.                                                                                                                                                                                                                                                             |
 | Another book as context              | Owned WEB/EPUB/TXT books can supply recent earlier chapters or style-only context without merging inventories. Matching controls are removed; historic matches remain stored.                                                                                                                                                                                                                             |
 | Models and concurrency               | Separate per-book translation/chat model choices; Luna translation default, GPT-4.1 mini chat default. Eight concurrent local AI tasks by default, configurable1-32; optional hourly cap. Source download pacing and sandbox limits remain separate.                                                                                                                                                      |
@@ -49,14 +52,14 @@ live-provider evaluated. Built-in email-link login supports the Free project's d
 | Contextual AI term suggestions       | Optional billable Suggest with AI uses the full current original, selected translation when available, exact/alias/similar terms from this book and selected glossaries, and a reader context box. Strict structured recommendations include evidence and alternatives; choosing and saving remain separate actions.                                                                                      |
 | Completion/failure handling          | Raw status/refusal checked before validation; partial chapters never saved. Complete grouped objects can be salvaged without JSON repair. Single output16,384; grouped Luna ceiling65,536, GPT-4.1 32,768, GPT-4o mini16,384. Invalid terms produce warnings. Bounded retries for transient/invalid results; quota/access/source changes and exhausted attempts stop. |
 | Exact resume                         | Original and translated chapter/language/version/scroll checkpoints persist separately; book/library Continue uses the newest reading activity. Observed timestamps reject late writes. Immediate-scroll navigation, refresh and local-cache removal are tested.                                                                                                                                          |
-| Minimal reader UI                    | Chat/Search in the header; top and bottom Previous/Next; Contents left, centered Original/Translate, Settings alone at bottom right. Light/dark inside Settings. Reading scrollbar hidden without disabling scrolling. Contents opens centered on the active chapter's page.                                                                                                                              |
-| Simplified book/workspace            | Book tabs: Contents, Downloads, Translate (source books), Bookmarks, Metadata. Metadata actions aligned; Edit in three-dot menu; no WEB/status badge. Downloads defaults to first missing chapter and has no disclosure panels. Translation Settings has preferences only; glossary, guide and metadata have dedicated tabs.                                                                              |
-| Reader chat/retrieval                | Existing read-only cited chat and bounded PostgreSQL full-text retrieval remain available. Index terms/offsets refer to saved text, not duplicate prose; Chinese segmentation and selected-glossary query expansion supported. Current focus is translation reliability, not additional chat features.                                                                                                    |
+| Minimal reader UI                    | Search in the header; chat button and panel disabled. Top/bottom Previous/Next; Contents left, Original/Translate centered, Settings bottom right. Appearance is in Settings, scrolling stays functional and Contents centers the active row. |
+| Simplified book/workspace            | Book tabs include Translated with saved translated titles and direct current-reader links. Contents retains originals and saved-translation markers. Six source-book tabs use a three-column phone layout. Translation preferences, glossary, guide and metadata retain separate views. |
+| Reader chat/retrieval                | Reader chat UI is disabled by request. Existing conversations and backend retrieval remain stored, not deleted. Replacement invalidates obsolete derived search text; no chat request is sent by the reader. |
 | Next-chapter blank state             | Missing translations show original text and the correct switch state instead of an empty page; the next chapter remains navigable.                                                                                                                                                                                                                                                                        |
 | Cost/privacy safeguards              | Owner RLS and private storage; confirmed paid actions, separate opt-in automatic guide work, token estimates and actual usage, no SDK retry, cached sandbox extraction and manual challenge handling.                                                                                                                                                                                                     |
 | Persistent jobs                      | Occupied AI slots wait without consuming attempts. Development reloads retain worker state. Auth refresh in any open view renews workers; interrupted authorized jobs recover on reconnect within attempt limits. Reader completion never redirects another book. Manual pauses stay paused; free-host shutdown/token expiry can still delay work. |
 | Admin and storage                    | Settings > Admin & usage: request-level estimates, unknown charges, quota errors, monthly alert threshold and jobs. Alert is not a hard spending cap or provider balance. New chapter files gzip when at least10% smaller; bounded decoding retains original hashes. Existing PostgreSQL TOAST/pglz kept after size comparison. |
-| Private hosting preparation          | Standalone Node API/static server, password/email-link/code sign-in, preserved owner UUID, restrictive RLS/Storage, Free Render template and private backup/manifest. Hosted schema deployed; owner verification, library-data transfer and GitHub/Render publication still pending. See note.txt and deployment.md. |
+| Private hosting                      | Owner-only SQL/Storage migration complete with strict TLS, rollback rehearsal, active foreign keys, exact row hashes and876 verified files. Permanent email owner verified, restrictive RLS active. Link/password sign-in and secure terminal password setup implemented. GitHub/Render publication and real-phone sign-in remain pending. |
 
 ### Limits and Research
 
@@ -80,6 +83,35 @@ live-provider evaluated. Built-in email-link login supports the Free project's d
   favors stable instructions and acknowledges compaction can change cache reuse; no cache-hit rate is promised.
 - The inspected Freewebnovel chapter121 uses "Soaring Mirage Serpent". That is an observed reference
   rendering, not an automatically approved glossary entry or evidence that every similar compound is equivalent.
+
+## Review and Optimization Priorities
+
+Reviewed Auth callbacks and owner gates, chapter-save/term-edit transactions, current-reader lookup,
+download concurrency, migration ordering/trigger control, source/file integrity and mobile workflows.
+The177 backend,51 app and13 installed-extension tests passed. Hosted read-only role tests allowed
+only the real owner and denied outsider/anonymous reads and a public Storage URL. No complete
+security audit or live translation-quality certification is claimed.
+
+Confirmed issues fixed during the review: callback failures hidden by initial Auth events, duplicate
+chapter storage/history controls, inaccessible saved-translation listing, stale edit/search/progress
+references, phone tab overflow, and migration preflight checking restriction without exact owner ID.
+The migration also now stops new upload dispatch and drains in-flight copies after an error.
+
+Remaining risks: the owner still needs to complete hidden password entry or browser sign-in;
+the frontend is not deployed; port5173 and hosted5174 are separate databases; a previously shared
+admin secret was not rotated at the owner's request. Password minimum8 was explicitly chosen.
+Free hosting can pause/restart, and a small scrape sample cannot establish site-wide reliability.
+
+| Priority | Optimization | Evidence / Acceptance Check |
+| --- | --- | --- |
+| 1 | Finish a single hosted read/write path and Mac ingestion connection. | Migration is verified but the old Mac endpoint still targets local DB. Confirm a newly downloaded sample and reading position on the phone without manual copying. |
+| 2 | Server-page the translated directory and cache status summaries by source/language. | Current BookPage loads1000 metadata rows per page until complete on refresh. Measure request bytes/query time at1000 and20,000 chapters; retain stable original positions and stale-response guards. |
+| 3 | Reduce the initial bundle with measured route/import splitting. | Production main JS is about590kB minified /172kB gzip; another shared chunk is348kB /104kB gzip. Inspect import attribution before changing chunk rules; compare cold phone load and parse time. |
+| 4 | Benchmark smaller translation models and group sizes on a fixed authorized sample. | No live translation speed/quality benchmark was performed. Compare1/3/5/10 chapter groups for cost per completed chapter, first-result latency and terminology consistency, not speed alone. |
+| 5 | Deduplicate repeated context snapshots while retaining source/hash/glossary provenance. | Translation rows retain substantial source, glossary and context JSON. Measure actual database/TOAST size first; never drop verification evidence merely to shrink rows. |
+| 6 | Add offline caching and prefetch only already-saved neighboring chapters. | Useful for phone connectivity and free-host wake latency. Cache by owner/source/hash/language and clear on logout; never trigger paid generation or new site requests as prefetch. |
+| 7 | Add incremental backup/restore verification and quota alerts. | The first transfer verified876 files but is intentionally not a sync/upsert command. Verify resumable deltas against explicit manifests; free Supabase has no automatic backup retention. |
+| 8 | Expand compatibility samples using validated site adapters. | Ten-domain audit: one end-to-end success, three stored chapters, one model request. Test additional accessible layouts before promotion; skip verification and never assume one book covers an entire site. |
 
 ## Translation Reliability and Bulk Investigation
 
