@@ -130,6 +130,7 @@ test('private production sign-in isolates accounts and supports password and ema
   const confirmationRequests: unknown[] = []
   let needsConfirmation = false
   const passwordUpdates: unknown[] = []
+  const resetRequests: unknown[] = []
   await page.route('https://private-library.supabase.test/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -153,6 +154,9 @@ test('private production sign-in isolates accounts and supports password and ema
         responseStatus = 422
         body = { code: 'signup_disabled', msg: 'Signups not allowed for this instance' }
       }
+    } else if (path === '/auth/v1/recover') {
+      resetRequests.push(request.postDataJSON())
+      expect(new URL(request.url()).searchParams.get('redirect_to')).toBe(origin)
     } else if (path === '/auth/v1/resend') {
       confirmationRequests.push(request.postDataJSON())
       expect(new URL(request.url()).searchParams.get('redirect_to')).toBe(origin)
@@ -241,6 +245,41 @@ test('private production sign-in isolates accounts and supports password and ema
   expect(confirmationRequests).toEqual([expect.objectContaining({ type: 'signup', email: user.email, code_challenge: expect.any(String), code_challenge_method: 's256' })])
   await page.goto(`${origin}/?code=fixture-confirmation-link-code`)
   await expect(page.locator('.app-shell')).toBeVisible()
+  // Recovery requested by the app uses a PKCE callback.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Library account', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Library account', exact: true }).getByRole('button', { name: 'Sign out', exact: true }).click()
+  await page.getByRole('button', { name: 'Use password', exact: true }).click()
+  await page.getByRole('button', { name: 'Forgot password?', exact: true }).click()
+  await page.getByLabel('Email', { exact: true }).fill(user.email)
+  await page.getByRole('button', { name: 'Send password reset link', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('password reset link has been sent')
+  expect(resetRequests).toEqual([expect.objectContaining({ email: user.email, code_challenge: expect.any(String) })])
+  await page.goto(`${origin}/?code=fixture-recovery-code`)
+  await expect(page.getByRole('heading', { name: 'Reset password', exact: true })).toBeVisible()
+  await expect(page.locator('.app-shell')).toHaveCount(0)
+  await page.getByLabel('New password', { exact: true }).fill('fixture-reset-password-123')
+  await page.getByLabel('Confirm new password', { exact: true }).fill('fixture-mismatched-password')
+  await page.getByRole('button', { name: 'Update password', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Passwords do not match')
+  expect(passwordUpdates).toHaveLength(1)
+  await page.getByLabel('Confirm new password', { exact: true }).fill('fixture-reset-password-123')
+  await page.getByRole('button', { name: 'Update password', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('Password updated.')
+  await page.getByRole('button', { name: 'Continue to library', exact: true }).click()
+  await expect(page.locator('.app-shell')).toBeVisible()
+  expect(passwordUpdates).toHaveLength(2)
+
+  // Supabase dashboard recovery emails carry tokens instead of a PKCE code.
+  const callback = new URLSearchParams({
+    access_token: session.access_token, refresh_token: session.refresh_token,
+    expires_in: '3600', token_type: 'bearer', type: 'recovery',
+  })
+  await page.goto(`${origin}/#${callback}`)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Reset password', exact: true })).toBeVisible()
+  await expect(page.locator('.app-shell')).toHaveCount(0)
+  await expect(page).not.toHaveURL(/access_token/)
   expect(anonymousRequests).toBe(0)
   expect(paidRequests).toBe(0)
   expect(writes).toBe(0)

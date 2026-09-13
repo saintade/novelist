@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { BookOpen, KeyRound, LoaderCircle, LogOut, Mail } from 'lucide-react'
 import { z } from 'zod'
-import { requiresPrivateSignIn, supabase } from '../../lib/supabase/client'
+import { completePasswordRecovery, passwordRecoveryPending, requiresPrivateSignIn, supabase } from '../../lib/supabase/client'
 import { Dialog } from '../ui'
 
 export function LibraryAccess({
@@ -17,6 +17,8 @@ export function LibraryAccess({
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [passwordSignIn, setPasswordSignIn] = useState(false)
+  const [forgotPassword, setForgotPassword] = useState(false)
+  const [recovering, setRecovering] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -33,6 +35,7 @@ export function LibraryAccess({
         const result = await supabase.auth.getSession()
         if (!cancelled && !receivedAuthEvent) {
           setSession(result.data.session)
+          setRecovering(passwordRecoveryPending(result.data.session?.user.id))
           if (!result.data.session && (initialization.error || hasEmailCallback))
             setError('This email link could not complete sign-in. Request a new link in the browser you are using now, then open the newest email in that same browser. No email code or password is needed.')
           else if (result.error) setError(result.error.message)
@@ -48,6 +51,7 @@ export function LibraryAccess({
       if (cancelled || (event === 'INITIAL_SESSION' && receivedAuthEvent)) return
       if (event !== 'INITIAL_SESSION') receivedAuthEvent = true
       setSession(current)
+      setRecovering(event === 'PASSWORD_RECOVERY' || passwordRecoveryPending(current?.user.id))
       if (event !== 'INITIAL_SESSION') setError('')
       setVerifiedOwner((previous) =>
         event === 'SIGNED_OUT' || current?.user.id !== previous ? '' : previous,
@@ -55,6 +59,7 @@ export function LibraryAccess({
       if (event === 'SIGNED_OUT' || event === 'SIGNED_IN') {
         setPassword('')
         setPasswordSignIn(false)
+        setForgotPassword(false)
         setEmailSent(false)
       }
     })
@@ -90,6 +95,11 @@ export function LibraryAccess({
     }
   }, [privateAccess, session, attempt])
   if (!privateAccess) return children
+  if (recovering && session && !session.user.is_anonymous)
+    return <PasswordRecovery onComplete={() => {
+      completePasswordRecovery()
+      setRecovering(false)
+    }} />
   if (session && !session.user.is_anonymous && verifiedOwner === session.user.id)
     return <Fragment key={session.user.id}>{children}</Fragment>
   const run = async (operation: () => Promise<{ error: { message: string } | null }>) => {
@@ -136,6 +146,13 @@ export function LibraryAccess({
           onSubmit={(event) => {
             event.preventDefault()
             void run(async () => {
+              if (forgotPassword) {
+                const result = await supabase.auth.resetPasswordForEmail(email.trim(), {
+                  redirectTo: window.location.origin,
+                })
+                if (!result.error) setEmailSent(true)
+                return result
+              }
               if (passwordSignIn) return supabase.auth.signInWithPassword({ email: email.trim(), password })
               let result = await supabase.auth.signInWithOtp({
                 email: email.trim(),
@@ -163,7 +180,7 @@ export function LibraryAccess({
               onChange={(event) => setEmail(event.target.value)}
             />
           </label>
-          {passwordSignIn && (
+          {passwordSignIn && !forgotPassword && (
             <label>
               Password
               <input
@@ -178,14 +195,26 @@ export function LibraryAccess({
           )}
           <button className="button primary" disabled={busy}>
             {busy ? <LoaderCircle size={16} className="spin" /> : passwordSignIn ? <KeyRound size={16} /> : <Mail size={16} />}
-            {passwordSignIn ? 'Sign in' : 'Email sign-in link'}
+            {forgotPassword ? 'Send password reset link' : passwordSignIn ? 'Sign in' : 'Email sign-in link'}
           </button>
+          {passwordSignIn && !forgotPassword && <button
+            type="button"
+            className="button subtle"
+            disabled={busy}
+            onClick={() => {
+              setForgotPassword(true)
+              setPassword('')
+              setEmailSent(false)
+              setError('')
+            }}
+          >Forgot password?</button>}
           <button
             type="button"
             className="button subtle"
             disabled={busy}
             onClick={() => {
               setPasswordSignIn(previous => !previous)
+              setForgotPassword(false)
               setPassword('')
               setEmailSent(false)
               setError('')
@@ -194,7 +223,9 @@ export function LibraryAccess({
             {passwordSignIn ? <Mail size={16} /> : <KeyRound size={16} />}
             {passwordSignIn ? 'Use email link' : 'Use password'}
           </button>
-          {emailSent && <p role="status">Sign-in email sent.</p>}
+          {emailSent && <p role="status">{forgotPassword
+            ? 'If an account exists for this email, a password reset link has been sent. Open the newest link in this same browser.'
+            : 'Sign-in email sent.'}</p>}
         </form>
       )}
       {error && (
@@ -202,6 +233,48 @@ export function LibraryAccess({
           {error}
         </p>
       )}
+    </main>
+  )
+}
+
+function PasswordRecovery({ onComplete }: { onComplete: () => void }) {
+  const [password, setPassword] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [updated, setUpdated] = useState(false)
+  return (
+    <main className="library-access">
+      <KeyRound size={32} strokeWidth={1.4} />
+      <h1>Reset password</h1>
+      {updated ? <>
+        <p role="status">Password updated.</p>
+        <button className="button primary" onClick={onComplete}>Continue to library</button>
+      </> : <form className="edit-form" onSubmit={async event => {
+        event.preventDefault()
+        setError('')
+        if (password !== confirmation) {
+          setError('Passwords do not match.')
+          return
+        }
+        setBusy(true)
+        try {
+          const result = await supabase.auth.updateUser({ password })
+          if (result.error) throw result.error
+          setPassword('')
+          setConfirmation('')
+          setUpdated(true)
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : 'The password could not be updated. Try again.')
+        } finally {
+          setBusy(false)
+        }
+      }}>
+        <label>New password<input type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={password} onChange={event => setPassword(event.target.value)} /></label>
+        <label>Confirm new password<input type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>
+        <button className="button primary" disabled={busy}>{busy && <LoaderCircle className="spin" size={16} />}Update password</button>
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </form>}
     </main>
   )
 }

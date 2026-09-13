@@ -4,12 +4,14 @@ import type { Database } from './database.types'
 const configuredUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:55321'
 const localHosts = ['localhost', '127.0.0.1', '[::1]']
 export const requiresPrivateSignIn = import.meta.env.VITE_AUTH_MODE === 'private' || !localHosts.includes(new URL(configuredUrl).hostname) || !localHosts.includes(window.location.hostname)
+// Dashboard-generated emails use token callbacks, while app-requested emails use PKCE.
+const tokenCallback = new URLSearchParams(window.location.hash.slice(1)).has('access_token')
 
 export const supabase = createClient<Database>(
   configuredUrl,
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'local-key-not-configured',
   {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: requiresPrivateSignIn, flowType: 'pkce' },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: requiresPrivateSignIn, flowType: tokenCallback ? 'implicit' : 'pkce' },
     global: {
       fetch: (input, init) =>
         fetch(input, {
@@ -24,7 +26,17 @@ export const supabase = createClient<Database>(
 )
 
 let sessionInitialization: Promise<string> | undefined
-supabase.auth.onAuthStateChange(event => {
+// Subscribe before React mounts: URL recovery can finish before the access gate subscribes.
+let recoveryUserId = ''
+export function passwordRecoveryPending(userId?: string) {
+  return Boolean(userId && recoveryUserId === userId)
+}
+export function completePasswordRecovery() {
+  recoveryUserId = ''
+}
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY') recoveryUserId = session?.user.id ?? ''
+  if (event === 'SIGNED_OUT') completePasswordRecovery()
   if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') sessionInitialization = undefined
 })
 

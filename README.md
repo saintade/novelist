@@ -138,6 +138,10 @@ app and API with production configuration. Static hosting alone cannot run the w
 owner-preserving migration. Free Render can sleep or restart; saved jobs/results remain in Supabase.
 Private sign-in defaults to email links, with separate password mode and visible callback errors.
 The link must open in the same browser/profile that requested it; VS Code is separate from Chrome.
+Password mode includes **Forgot password?** to request a recovery email. Recovery links open a
+new-password form before the library. Both app-requested PKCE links and dashboard-generated
+token links are supported. Hosted Supabase's Site URL and redirect allowlist must include the
+deployed HTTPS origin; changing Render environment variables does not update these Auth settings.
 There is no code-entry step for the default email template. `npm run account:password -- --help`
 describes hidden-input password setup for the verified owner; no password is included in this repo.
 
