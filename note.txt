@@ -10,7 +10,8 @@ matched. The local library was not removed or reset.
 
 Hosted-connected Mac app: http://127.0.0.1:5174 (AI currently disabled).
 Port 5173 still uses the separate local database; it is NOT a live cloud sync.
-GitHub authorization/push and the Render frontend deployment remain pending.
+Code is pushed to https://github.com/saintade/novelist (public by owner choice).
+The Render frontend deployment remains pending.
 
 PASSWORD SETUP
 The email link verifies/signs in; it does not generate a password or email code.
@@ -33,13 +34,14 @@ only in your terminal or hosting dashboards, never in this file or in Git.
 The application server needs only the Supabase publishable key, not a secret key.
 
 1. AUTHORIZE THE CLIS
-   Supabase login is complete. GitHub still needs authorization in your terminal:
-     gh auth login
+   Supabase login is complete. GitHub push is complete using SSH; main tracks
+   origin/main at git@github.com:saintade/novelist.git. No new repository is needed.
    A project publishable/secret API key is not a Supabase CLI access token and is
    not the database password. This CLI supports Management API SQL with
    --linked --project-ref, so schema deployment did not require sharing a database
    password. A direct restore connection, if needed, must be configured privately.
-   The intended GitHub repository is a new PRIVATE repository named novelist.
+   The owner explicitly chose a PUBLIC code repository. Books, private backups,
+   environment secrets and browser profiles were not uploaded.
 
 2. MIGRATION COMPLETE; PRESERVE THE BACKUPS
    Target project: klkjphqfzzbcecksdwtw
@@ -96,23 +98,33 @@ The application server needs only the Supabase publishable key, not a secret key
    supabase/config.toml to production. Always review config diff before pushing.
 
 4. CREATE A FREE RENDER WEB SERVICE
-   Connect the private novelist GitHub repository. Choose Web Service, Node,
+   Connect the saintade/novelist GitHub repository. Choose Web Service, Node,
    Free instance, one instance, and a region near the Supabase project.
    Build command: npm ci --include=dev && npm run build
    Start command: npm start
    Health check: /health
    Auto-deploy: off until migration and checks are complete.
    render.yaml contains the equivalent Blueprint. No paid resources are required
-   by that template. Review Render's current quotas before creating the service.
+   by that template. maxShutdownDelaySeconds is omitted because Free services
+   reject it. The default shutdown grace period is 30 seconds, not 300 seconds.
+   The blueprint already includes the Supabase URL, publishable key and owner ID,
+   and obtains NOVELIST_PUBLIC_ORIGIN from its own RENDER_EXTERNAL_URL.
+   Refresh/reload the Blueprint from main if Render still shows the old setting.
+
+   OPENAI_API_KEY belongs in Render's initial Blueprint prompt, or the service's
+   Environment > Add Environment Variable screen. Enter its value directly there,
+   then save/rebuild/deploy. Never add it to render.yaml, Git, or a VITE_ variable.
+   To enable paid translations, set NOVELIST_ENABLE_LIVE_AI=true in Render as well.
+   Leave it false, with no model key, for saved-book reading only.
 
    Environment variables (these are names/settings, not secret values):
      NODE_VERSION=24.13.0
      NODE_ENV=production
      VITE_AUTH_MODE=private
      VITE_SUPABASE_URL=https://klkjphqfzzbcecksdwtw.supabase.co
-     VITE_SUPABASE_PUBLISHABLE_KEY=<project publishable key from Supabase>
+   VITE_SUPABASE_PUBLISHABLE_KEY=<already prefilled in render.yaml>
      NOVELIST_ALLOWED_USER_ID=28fd9dab-36c4-46b4-a96a-53583f44ff50
-     NOVELIST_PUBLIC_ORIGIN=https://<your-service>.onrender.com
+   NOVELIST_PUBLIC_ORIGIN=<automatically uses Render's assigned HTTPS URL>
      NOVELIST_ENABLE_LIVE_AI=false
      NOVELIST_AI_CONCURRENCY=2
      NOVELIST_AI_REQUESTS_PER_HOUR=0

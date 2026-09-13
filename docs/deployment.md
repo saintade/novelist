@@ -4,8 +4,9 @@ Status (2026-09-12): Supabase project `klkjphqfzzbcecksdwtw` has all56 migration
 202609110044 and the migrated library:3 books,165 current chapter translations, one metadata
 preview,876 downloaded originals and876 private files. The permanent owner verified their email;
 the exact owner UUID and restrictive table/Storage policies are active. All30 owner-table row/ID
-fingerprints and every file's SHA-256 matched after the hosted restore. GitHub push, Render deployment
-and physical-phone sign-in remain pending. Password setup requires hidden terminal input.
+fingerprints and every file's SHA-256 matched after the hosted restore. Code is published to
+`saintade/novelist`, publicly by explicit owner choice. Render deployment and physical-phone sign-in
+remain pending. Password setup requires hidden terminal input.
 See [note.txt](../note.txt) for exact settings and current enrollment instructions.
 
 The verified transfer backup is under `.novelist/backups/hosted-transfer-2026-09-12T23-46-11.300Z/`:
@@ -46,15 +47,16 @@ No password has been generated, embedded in the app, or stored in these notes.
 
 ## Deploy Free
 
-1. Run `gh auth login` in your terminal. After committing and secret-scanning, create the intended
-   private repository with `gh repo create novelist --private --source=. --remote=origin --push`.
-   Skip repository creation if you already created it; push to that repository instead.
-2. In Render, choose **New > Blueprint**, connect the private repository and review `render.yaml`.
+1. The secret-scanned code is already pushed to [saintade/novelist](https://github.com/saintade/novelist).
+   Use its latest `main` commit; no new repository or database migration is needed.
+2. In Render, choose **New > Blueprint**, connect the repository and review `render.yaml`.
    It declares one **Free Node Web Service**, not a Render database. Keep Supabase as the database.
-3. Supply `VITE_AUTH_MODE=private`, the hosted Supabase URL and its publishable key,
-   `NOVELIST_ALLOWED_USER_ID=28fd9dab-36c4-46b4-a96a-53583f44ff50`, and
-   `NOVELIST_PUBLIC_ORIGIN=https://YOUR-SERVICE.onrender.com`. Use the exact assigned Render origin.
-   Leave `NOVELIST_ENABLE_LIVE_AI=false` and `OPENAI_API_KEY` empty for reading saved books.
+3. The blueprint pre-fills the hosted Supabase URL, browser-safe `sb_publishable_` key and owner UUID.
+   It sets private Auth and derives `NOVELIST_PUBLIC_ORIGIN` from this service's `RENDER_EXTERNAL_URL`.
+   Enter `OPENAI_API_KEY` only in Render's initial Blueprint environment prompt, never in YAML or Git.
+   For an existing service, open **Environment > Add Environment Variable**, use that exact key name,
+   and select **Save, rebuild, and deploy**. Set `NOVELIST_ENABLE_LIVE_AI=true` there only to enable
+   paid translation requests. Saved-book reading needs neither a model key nor live AI.
 4. Build with `npm ci --include=dev && npm run build`; start with `npm start`; health path is `/health`.
    Node24 is specified by the blueprint. Rebuild after changing any `VITE_` setting.
 5. In Supabase **Authentication > URL Configuration**, set Site URL to the Render HTTPS origin.
@@ -70,7 +72,8 @@ No password has been generated, embedded in the app, or stored in these notes.
 Free-tier limits checked2026-09-12: Supabase includes500MB database,1GB files,5GB egress plus5GB
 cached egress, and may pause after a week of inactivity; automatic backups are not included. Render
 Free has750 shared instance-hours/month, sleeps after15idle minutes, and may take about a minute
-to wake. It can restart or suspend for quota/traffic limits. Do not add keep-alive traffic to evade
+to wake. Free services do not accept `maxShutdownDelaySeconds`; the blueprint deliberately omits it
+and uses Render's default30-second shutdown window. It can restart or suspend for quota/traffic limits. Do not add keep-alive traffic to evade
 these limits. Reading within quotas can cost$0; OpenAI translation/extractor calls are not free.
 
 A static host such as Cloudflare Pages can serve an already-downloaded library using Supabase,
@@ -95,7 +98,8 @@ blueprint is the least-change route to the complete experience. No public fronte
 - Migration033 adds inactive-local restrictive policies and an administrator-only activation RPC;
    later new tables also carry the restriction. Production startup refuses an unrestricted database.
 - Durable regular/grouped workers support automatic retries, separate reader jobs, paused intent,
-   phase leases and guarded commits. Shutdown drains active requests/workers for up to240seconds.
+   phase leases and guarded commits. The app permits up to240seconds to drain active work, but
+   Render Free can terminate it after its default30-second grace period; a longer drain is not guaranteed.
    Ordinary Vite reloads retain worker state; a server interruption can recover on authenticated
    reconnect within3 total chapter attempts. Quota/access/source errors and exhausted attempts stop.
 - `render.yaml` selects a single Free service and manual deploys. It does not create Supabase,

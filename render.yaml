@@ -8,7 +8,6 @@ services:
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 300
     envVars:
       - key: NODE_VERSION
         value: 24.13.0
@@ -17,13 +16,16 @@ services:
       - key: VITE_AUTH_MODE
         value: private
       - key: VITE_SUPABASE_URL
-        sync: false
+        value: https://klkjphqfzzbcecksdwtw.supabase.co
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        value: sb_publishable_5a3OdhK4pcHNmUaNg4boUA_5ZvIkYQM
       - key: NOVELIST_ALLOWED_USER_ID
-        sync: false
+        value: 28fd9dab-36c4-46b4-a96a-53583f44ff50
       - key: NOVELIST_PUBLIC_ORIGIN
-        sync: false
+        fromService:
+          name: novelist
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: OPENAI_API_KEY
         sync: false
       - key: NOVELIST_ENABLE_LIVE_AI
