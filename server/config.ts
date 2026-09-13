@@ -7,10 +7,12 @@ export function productionConfiguration(
   environment: NodeJS.ProcessEnv,
   root: string,
 ): AIConfiguration {
+  const publicOrigin = environment.NOVELIST_PUBLIC_ORIGIN?.trim() || environment.RENDER_EXTERNAL_URL?.trim()
   const source = z
     .object({
       NOVELIST_ALLOWED_USER_ID: z.string().uuid(),
       NOVELIST_PUBLIC_ORIGIN: z.url().refine((value) => {
+        if (!URL.canParse(value)) return false
         const url = new URL(value)
         return (
           url.protocol === 'https:' &&
@@ -46,10 +48,10 @@ export function productionConfiguration(
         z.coerce.number().int().min(16384).max(65536).optional(),
       ),
     })
-    .safeParse(environment)
+    .safeParse({ ...environment, NOVELIST_PUBLIC_ORIGIN: publicOrigin })
   if (!source.success)
     throw new Error(
-      `Invalid production configuration: ${source.error.issues.map((issue) => issue.path.join('.')).join(', ')}`,
+      `Invalid production configuration: ${source.error.issues.map((issue) => issue.path.join('.')).join(', ')}${source.error.issues.some(issue => issue.path[0] === 'NOVELIST_PUBLIC_ORIGIN') ? '. Set NOVELIST_PUBLIC_ORIGIN to your public HTTPS URL (no path, query or credentials), or leave it unset to use RENDER_EXTERNAL_URL on Render.' : ''}`,
     )
   if (environment.NOVELIST_ENABLE_LIVE_AI === 'true' && !environment.OPENAI_API_KEY)
     throw new Error('OPENAI_API_KEY is required when live AI is enabled.')

@@ -21,11 +21,6 @@ services:
         value: sb_publishable_5a3OdhK4pcHNmUaNg4boUA_5ZvIkYQM
       - key: NOVELIST_ALLOWED_USER_ID
         value: 28fd9dab-36c4-46b4-a96a-53583f44ff50
-      - key: NOVELIST_PUBLIC_ORIGIN
-        fromService:
-          name: novelist
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
       - key: OPENAI_API_KEY
         sync: false
       - key: NOVELIST_ENABLE_LIVE_AI

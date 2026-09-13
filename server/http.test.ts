@@ -22,7 +22,11 @@ describe('private production server', () => {
     if (!address || typeof address === 'string') throw new Error('Missing test port')
     await new Promise<void>((resolve) => reservation.close(() => resolve()))
     try {
-      for (const restricted of [false, true]) {
+      for (const { restricted, originVariable } of [
+        { restricted: false, originVariable: 'RENDER_EXTERNAL_URL' },
+        { restricted: true, originVariable: 'RENDER_EXTERNAL_URL' },
+        { restricted: true, originVariable: 'NOVELIST_PUBLIC_ORIGIN' },
+      ]) {
         const preload = `globalThis.fetch = async input => { if (String(input) !== 'https://library.supabase.test/rest/v1/rpc/library_access_status') throw new Error('Unexpected startup network request'); return new Response(JSON.stringify({restricted:${restricted},allowed:false}),{headers:{'Content-Type':'application/json'}}) }`
         const child = spawn(
           process.execPath,
@@ -39,7 +43,7 @@ describe('private production server', () => {
               NODE_ENV: 'production',
               PORT: String(address.port),
               NOVELIST_ALLOWED_USER_ID: crypto.randomUUID(),
-              NOVELIST_PUBLIC_ORIGIN: `https://127.0.0.1:${address.port}`,
+              [originVariable]: `https://127.0.0.1:${address.port}`,
               VITE_SUPABASE_URL: 'https://library.supabase.test',
               VITE_SUPABASE_PUBLISHABLE_KEY: 'test-publishable-key-long',
               NOVELIST_ENABLE_LIVE_AI: 'false',
@@ -113,6 +117,51 @@ describe('private production server', () => {
         '',
       ),
     ).toThrow('VITE_SUPABASE_PUBLISHABLE_KEY')
+  })
+  it.each([undefined, '', '   '])('uses the Render runtime URL when the custom origin is absent or blank: %j', override => {
+    const configuration = productionConfiguration({
+      NOVELIST_ALLOWED_USER_ID: crypto.randomUUID(),
+      NOVELIST_PUBLIC_ORIGIN: override,
+      RENDER_EXTERNAL_URL: '  https://novelist-fixture.onrender.com/  ',
+      VITE_SUPABASE_URL: 'https://library.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'test-publishable-key-long',
+    }, '')
+    expect(configuration.publicOrigin).toBe('https://novelist-fixture.onrender.com')
+    expect(configuration.hosted).toBe(true)
+  })
+  it('prefers an explicit custom origin over the Render URL', () => {
+    const configuration = productionConfiguration({
+      NOVELIST_ALLOWED_USER_ID: crypto.randomUUID(),
+      NOVELIST_PUBLIC_ORIGIN: ' https://reader.example.test/ ',
+      RENDER_EXTERNAL_URL: 'https://novelist-fixture.onrender.com',
+      VITE_SUPABASE_URL: 'https://library.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'test-publishable-key-long',
+    }, '')
+    expect(configuration.publicOrigin).toBe('https://reader.example.test')
+  })
+  it.each([
+    'novelist-fixture.onrender.com',
+    'http://novelist-fixture.onrender.com',
+    'https://reader@novelist-fixture.onrender.com',
+    'https://novelist-fixture.onrender.com/read/book/1',
+    'https://novelist-fixture.onrender.com/?code=fixture',
+    'https://novelist-fixture.onrender.com/#fragment',
+    '${RENDER_EXTERNAL_URL}',
+  ])('rejects unsafe origins from both explicit and Render configuration: %s', invalidOrigin => {
+    const base = {
+      NOVELIST_ALLOWED_USER_ID: crypto.randomUUID(),
+      VITE_SUPABASE_URL: 'https://library.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'test-publishable-key-long',
+    }
+    expect(() => productionConfiguration({ ...base, RENDER_EXTERNAL_URL: invalidOrigin }, '')).toThrow('NOVELIST_PUBLIC_ORIGIN')
+    expect(() => productionConfiguration({ ...base, NOVELIST_PUBLIC_ORIGIN: invalidOrigin, RENDER_EXTERNAL_URL: 'https://novelist-fixture.onrender.com' }, '')).toThrow('NOVELIST_PUBLIC_ORIGIN')
+  })
+  it('explains the required origin when neither environment variable is configured', () => {
+    expect(() => productionConfiguration({
+      NOVELIST_ALLOWED_USER_ID: crypto.randomUUID(),
+      VITE_SUPABASE_URL: 'https://library.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'test-publishable-key-long',
+    }, '')).toThrow('leave it unset to use RENDER_EXTERNAL_URL on Render')
   })
   it('serves nested reader URLs but never repository files or unauthenticated AI', async () => {
     const assets = await mkdtemp(join(tmpdir(), 'novelist-host-'))
